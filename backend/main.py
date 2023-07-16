@@ -51,7 +51,7 @@ async def t(mod_id:int):
         return {"время с последнего обновления": time_difference, "прошло 10 минут": time_difference >= timedelta(minutes=10), "прошло 10 часов": time_difference >= timedelta(hours=10), "прошло 10 дней": time_difference >= timedelta(days=10)}
     else: return {"message": "Такого мода нету на сервере!!"}
 
-@app.get("/api/download/{mod_id}")
+@app.get("/api/download/steam/{mod_id}")
 async def mod_dowloader_request(mod_id: int):
     if threads["start"].is_alive(): #Проверяем, готов ли сервер обрабатывать запросы
         return {"message": "the server is not ready to process requests", "error_id": 1}
