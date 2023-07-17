@@ -1,9 +1,10 @@
 import os
 import threading
 import sqlite3
-import zipfile
 import shutil
-from pathlib import Path
+import requests
+import tools
+from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
@@ -29,37 +30,28 @@ async def root():
 
 @app.get("/t/{mod_id}")
 async def t(mod_id:int):
-    cursor = conn.cursor()
+    # Отправка запроса на сервер
+    response = requests.get(f'https://store.steampowered.com/app/{mod_id}')
 
-    # Получение значения времени из базы данных
-    cursor.execute(f"SELECT data_event FROM downloaded_mods WHERE mod_id = {mod_id}")
-    result = cursor.fetchone()
-    if result != None:
-        db_datetime = datetime.strptime(result[0], '%Y-%m-%d %H:%M:%S')
+    # Создание объекта BeautifulSoup для парсинга HTML
+    soup = BeautifulSoup(response.text, 'html.parser')
 
-        # Получение текущего времени
-        current_datetime = datetime.now()
+    # Найти div элемент с id "appHubAppName"
+    div_element = soup.find('div', id='appHubAppName')
 
-        # Вычисление разницы во времени
-        time_difference = current_datetime - db_datetime
+    # Вывод содержимого div элемента
+    if div_element:
+        return div_element.text
+    else:
+        return "Div элемент с id 'appHubAppName' не найден на странице."
 
-        # Проверка, прошло ли 10 дней
-        if time_difference >= timedelta(days=10):
-            # Выполнение вашего кода
-            print("Прошло 10 дней!")
-
-        return {"время с последнего обновления": time_difference, "прошло 10 минут": time_difference >= timedelta(minutes=10), "прошло 10 часов": time_difference >= timedelta(hours=10), "прошло 10 дней": time_difference >= timedelta(days=10)}
-    else: return {"message": "Такого мода нету на сервере!!"}
 
 @app.get("/api/download/steam/{mod_id}")
 async def mod_dowloader_request(mod_id: int):
-    if threads["start"].is_alive(): #Проверяем, готов ли сервер обрабатывать запросы
-        return {"message": "the server is not ready to process requests", "error_id": 1}
-
     cursor = conn.cursor()
     cursor.execute(f'''
         SELECT * FROM downloaded_mods
-        WHERE mod_id = {int(mod_id)}
+        WHERE mod_id = {int(mod_id)} AND source = "steam"
     ''')
     rows = cursor.fetchall()
     path = 'steamapps/workshop/content/'
@@ -77,14 +69,14 @@ async def mod_dowloader_request(mod_id: int):
                 return FileResponse(path_real+'.zip', filename=f"{rows[0][2]}.zip")
             elif os.path.isdir(path): #Если это по какой-то причине - папка
                 #Пытаемся фиксануть проблему
-                zipping(game_id=rows[0][0], mod_id=mod_id)
+                tools.zipping(game_id=rows[0][0], mod_id=mod_id)
 
                 #Шлем пользователю
                 return FileResponse(path_real+'.zip', filename=f"{rows[0][2]}.zip")
             else: #Удаляем запись в БД как не действительную
                 cursor = conn.cursor()
                 cursor.execute(f'''
-                            DELETE FROM downloaded_mods WHERE mod_id = {int(mod_id)}
+                            DELETE FROM downloaded_mods WHERE mod_id = {int(mod_id)} AND source = "steam"
                             ''')
                 cursor.close()
                 conn.commit()
@@ -96,6 +88,7 @@ async def mod_dowloader_request(mod_id: int):
 
     real_path = path+f'{item.game}/{mod_id}'
     if (rows != None and len(rows) > 0) or os.path.isfile(real_path+'.zip') or os.path.isdir(real_path):  # Проверяем есть ли запись на сервере в каком-либо виде
+        update = True
         if (rows != None and len(rows) > 0) and os.path.isfile(real_path+'.zip'):  # Если это ZIP архив - отправляем
             db_datetime = datetime.strptime(rows[0][4], '%Y-%m-%d %H:%M:%S')
             # Вычисление разницы во времени
@@ -103,6 +96,7 @@ async def mod_dowloader_request(mod_id: int):
 
             # Проверка, нужно ли обновить мод
             if time_difference <= timedelta(days=7):
+                update = False
                 return FileResponse(real_path+'.zip', filename=f"{mod_id}.zip")
         elif (rows != None and len(rows) > 0) and os.path.isdir(real_path):  # Если это по какой-то причине - папка
             db_datetime = datetime.strptime(rows[0][4], '%Y-%m-%d %H:%M:%S')
@@ -111,8 +105,9 @@ async def mod_dowloader_request(mod_id: int):
 
             # Проверка, нужно ли обновить мод
             if time_difference <= timedelta(days=7):
+                update = False
                 # Пытаемся фиксануть проблему
-                zipping(game_id=rows[0][0], mod_id=mod_id)
+                tools.zipping(game_id=rows[0][0], mod_id=mod_id)
                 # Шлем пользователю
                 return FileResponse(real_path+'.zip', filename=f"{rows[0][2]}.zip")
 
@@ -124,40 +119,39 @@ async def mod_dowloader_request(mod_id: int):
 
         cursor = conn.cursor()
         cursor.execute(f'''
-                    DELETE FROM downloaded_mods WHERE mod_id = {int(mod_id)}
+                    DELETE FROM downloaded_mods WHERE mod_id = {int(mod_id)} AND source = "steam"
                     ''')
         cursor.close()
         conn.commit()
 
+    if threads["start"].is_alive(): #Проверяем, готов ли сервер обрабатывать запросы
+        return {"message": "the server is not ready to process requests", "error_id": 1}
+
+    #Делаем запрос с целью выйснить были ли неудачные попытки
+    cursor.execute(f'''
+            SELECT * FROM not_loaded_mods
+            WHERE mod_id = {int(mod_id)} AND source = "steam"
+        ''')
+    rows = cursor.fetchall()
 
     #Загружаем мод на сервер
     cursor.execute(f'''
-        INSERT INTO requested_mods (game_id, mod_id, mod_name, mod_size, data_event)
-        VALUES ({int(item.game)}, {int(mod_id)}, "{str(item.title)}", {int(item.size)}, datetime('now'));
+        INSERT INTO requested_mods (game_id, mod_id, mod_name, mod_size, data_event, source)
+        VALUES ({int(item.game)}, {int(mod_id)}, "{str(item.title)}", {int(item.size)}, datetime('now'), "steam");
     ''')
     cursor.close()
     conn.commit()
     threading.Thread(target=mod_dowload, args=(item.game, mod_id, ), name=f"{item.game}/{mod_id}").start()
     #Оповещаем пользователя, что его запрос принят в обработку
-    return {"message": "request added to queue", "error_id": 0}
-
-
-#TODO: Cделать API которое на запрос может послать список доступных модов здесь на сервере, входные данные - (id игры, размер страницы, номер страницы)
-
-#TODO: Сделать функцию возвращающую массив всех игр к которым есть хотя бы один мод, входные данные - (размер страницы, номер страницы)
-
-#TODO: Сделать функцию возвращающую столбец по фильтру ID, входные данные - (ID мода)
-
-
+    return {"message": "request added to queue", "error_id": 0, "unsuccessful_attempts": rows != None and len(rows) > 0}
 def mod_dowload(game_id: int, mod_id: int, mod_name: str = "mod"):
     global threads
     #Ставим задачу загрузить мод
-    print(f"Поставлена задача на загрузку: {game_id}/{mod_id}")
     threads[f"{game_id}/{mod_id}"] = True
+    print(f"Поставлена задача на загрузку: {game_id}/{mod_id}")
     steam.workshop_update(app_id=game_id, workshop_id=mod_id, install_dir=WORKSHOP_DIR)
-    del threads[f"{game_id}/{mod_id}"]
 
-    ok = zipping(game_id=game_id, mod_id=mod_id)
+    ok = tools.zipping(game_id=game_id, mod_id=mod_id)
 
     conn_sql = sqlite3.connect('database.db')
 
@@ -174,9 +168,41 @@ def mod_dowload(game_id: int, mod_id: int, mod_name: str = "mod"):
                   , mod_name
                   , mod_size
                   , data_event
+                  , source
                 FROM requested_mods
-                WHERE game_id = {int(game_id)} AND mod_id = {int(mod_id)}
+                WHERE game_id = {int(game_id)} AND mod_id = {int(mod_id)} AND source = "steam"
             ''')
+
+        #Если мод ранее не могли загрузить, но сейчас загрузили - удаляем из списка не загруженных
+        cursor.execute(f'''
+                DELETE FROM not_loaded_mods WHERE game_id = {int(game_id)} AND mod_id = {int(mod_id)}
+                ''')
+        conn_sql.commit()
+
+        cursor.execute(f'''
+                    SELECT * FROM games
+                    WHERE game_id = {int(game_id)} AND source = "steam"
+                ''')
+        conn_sql.commit()
+        rows = cursor.fetchall()
+        if rows == None or len(rows) <= 0:
+            # Отправка запроса на сервер
+            try:
+                response = requests.get(f'https://store.steampowered.com/app/{game_id}')
+
+                # Создание объекта BeautifulSoup для парсинга HTML
+                soup = BeautifulSoup(response.text, 'html.parser')
+
+                # Найти div элемент с id "appHubAppName"
+                div_element = soup.find('div', id='appHubAppName')
+
+                conn_sql.commit()
+                cursor.execute(f'''
+                    INSERT INTO games (game_id, game_name, data_event, source)
+                    VALUES ({int(game_id)}, "{div_element.text}", datetime('now'), "steam");
+                ''')
+            except:
+                print(f"Ожидание имени игры окончено ошибкой ({game_id})")
     else: #Если загрузка окончена ошибкой
         cursor.execute(f'''
                 INSERT INTO not_loaded_mods
@@ -186,39 +212,52 @@ def mod_dowload(game_id: int, mod_id: int, mod_name: str = "mod"):
                   , mod_name
                   , mod_size
                   , data_event
+                  , source
                 FROM requested_mods
-                WHERE game_id = {int(game_id)} AND mod_id = {int(mod_id)}
+                WHERE game_id = {int(game_id)} AND mod_id = {int(mod_id)} AND source = "steam"
             ''')
     cursor.close()
     conn_sql.commit()
 
     cursor = conn_sql.cursor()
     cursor.execute(f'''
-            DELETE FROM requested_mods WHERE game_id = {int(game_id)} AND mod_id = {int(mod_id)}
+            DELETE FROM requested_mods WHERE game_id = {int(game_id)} AND mod_id = {int(mod_id)} AND source = "steam"
             ''')
     cursor.close()
     conn_sql.commit()
 
     conn_sql.close()
+    del threads[f"{game_id}/{mod_id}"]
 
-def zipping(game_id: int, mod_id: int) -> bool:
-    # Запаковываем сохраненный мод в архив (для экономии места и трафика)
-    directory_path = f"steamapps/workshop/content/{game_id}/{mod_id}"  # Укажите путь к вашей папке
-    zip_path = f"steamapps/workshop/content/{game_id}/{mod_id}.zip"  # Укажите путь к ZIP-архиву, который вы хотите создать
 
-    if not os.path.isdir(directory_path) or not any(Path(directory_path).iterdir()):
-        if os.path.isdir(directory_path):
-            shutil.rmtree(directory_path)
-        return False
+#TODO: Если источник ALL то не проводить проверку по источнику
+@app.get("/api/list/mods/{page_size}/{page_number}/{source}/{game_id}")
+async def mod_list(page_size: int, page_number: int, source: str, game_id: int):
+    cursor = conn.cursor()
 
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_BZIP2) as zipf:
-        for root, _, files in os.walk(directory_path):
-            for file in files:
-                file_path = os.path.join(root, file)
-                zipf.write(file_path, os.path.relpath(file_path, directory_path))
-    # Удаление исходной папки и её содержимого
-    shutil.rmtree(directory_path)
-    return True
+    # Выполнение запроса с передачей значений фильтров
+    cursor.execute(f'''
+        SELECT * FROM downloaded_mods WHERE game_id = {game_id} AND source = "{source}" LIMIT {page_size} OFFSET {page_size*page_number}
+        ''')
+    # Получение результатов запроса
+    results = cursor.fetchall()
+
+    #Получаем размер базы данных
+    cursor.execute(f'''
+        SELECT COUNT(*) FROM downloaded_mods
+        ''')
+    database_size = cursor.fetchall()
+    
+    cursor.close()
+
+    # Вывод результатов
+    return {"database_size": database_size[0][0], "request": {"page_size": page_size, "page_number": page_number, "offeset": page_size*page_number, "source": source, "game_id": game_id}, "results": results}
+
+#TODO: Сделать функцию возвращающую массив всех игр к которым есть хотя бы один мод, входные данные - (размер страницы, номер страницы)
+
+#TODO: Сделать функцию возвращающую инфо о конкретном моде и его состоянии на сервере по фильтру ID, входные данные - (ID мода)
+
+#TODO: Сделать функцию возвращающую инфо о конкретной игре и её состоянии на сервере по фильтру ID, входные данные - (ID игры, источник (опционально))
 
 
 def init():
@@ -239,7 +278,8 @@ if threads.get("start", None) == None:
             mod_id INTEGER,
             mod_name TEXT,
             mod_size INTEGER,
-            data_event DATETIME
+            data_event DATETIME,
+            source TEXT
         )
     ''')
     cursor.execute('''
@@ -248,7 +288,8 @@ if threads.get("start", None) == None:
             mod_id INTEGER,
             mod_name TEXT,
             mod_size INTEGER,
-            data_event DATETIME
+            data_event DATETIME,
+            source TEXT
         )
     ''')
     cursor.execute('''
@@ -257,7 +298,16 @@ if threads.get("start", None) == None:
             mod_id INTEGER,
             mod_name TEXT,
             mod_size INTEGER,
-            data_event DATETIME
+            data_event DATETIME,
+            source TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS games (
+            game_id INTEGER,
+            game_name TEXT,
+            data_event DATETIME,
+            source TEXT
         )
     ''')
 
