@@ -22,20 +22,20 @@
 **JSON ответы:**
 
 1. **Успешная постановка запроса на скачивание:**
-```json
+```
 {"message": "request added to queue", "error_id": 0, "unsuccessful_attempts": true / false}
 ```
 * `unsuccessful_attempts` - это пометка сообщает о том были ли провальные попытки скачать мод.
 
 2. **Сервер запускается:**
-```json
+```
 {"message": "the server is not ready to process requests", "error_id": 1}
 ```
 * Это ошибка возникает в ситуации когда сервер ещё не успел запустить службу по скачиванию модов,
 а на самом сервере этого мода нет.
 
 3. **Мод не найден:**
-```json
+```
 {"message": "this mod was not found", "error_id": 2, "info": {"check_error": true / false, "search_error": true / false}}
 ```
 * Сервер использует **API** [modsdownloader.com](https://modsdownloader.com/) для определения существует ли мод
@@ -46,7 +46,7 @@
 * `search_error` - если `true`, то [modsdownloader.com](https://modsdownloader.com/) утверждает, что мода не существует.
 
 4. **Сервер уже пытается скачать этот мод:**
-```json
+```
 {"message": "your request is already being processed", "error_id": 3}
 ```
 * Постоянно спрашивать состояние мода через эту функцию не рекомендую, так как она достаточно медленная. 
@@ -61,7 +61,7 @@
 4. `source` *(str)* *(опционально)* - фильтрация по источнику, например `steam`. **Если источник не важен** передать `ALL`.
 
 **JSON ответ:**
-```json
+```
 {"database_size": int, "request": {"page_size": int, "page_number": int, "offeset": int, "source": str, "game_id": int}, "results": list[list]}
 ```
 * `database_size` - общий размер базы данных с текущими фильтрами *(`game_id` и `source`)*.
@@ -85,7 +85,7 @@
 3. `source` *(str)* *(опционально)* - фильтрация по источнику, например `steam`. **Если источник не важен** передать `ALL`.
 
 **JSON ответ:**
-```json
+```
 {"database_size": int, "request": {"page_size": int, "page_number": int, "offeset": int, "source": str}, "results": list[list]}
 ```
 * `database_size` - общий размер базы данных с текущими фильтрами *(`source`)*.
@@ -104,7 +104,7 @@
 Нужно передать только `ID` мода.
 
 **JSON ответ:**
-```json
+```
 {"request": {"mod_id": int}, "condition": int, "downloaded": list / null, "requested": list / null, "not_loaded": list[list] / null}
 ```
 * `request` - возвращает словарь с вашим запросом.
@@ -136,7 +136,7 @@
 Нужно передать только `ID` игры.
 
 **JSON ответ:**
-```json
+```
 {"request": {"game_id": int}, "results": list / null}
 ```
 * `request` - возвращает словарь с вашим запросом.
