@@ -46,7 +46,7 @@ async def t(mod_id:int):
         return "Div элемент с id 'appHubAppName' не найден на странице."
 
 
-@app.get("/api/download/steam/{mod_id}")
+@app.get("/download/steam/{mod_id}")
 async def mod_dowloader_request(mod_id: int):
     cursor = conn.cursor()
     cursor.execute(f'''
@@ -230,34 +230,110 @@ def mod_dowload(game_id: int, mod_id: int, mod_name: str = "mod"):
     del threads[f"{game_id}/{mod_id}"]
 
 
-#TODO: Если источник ALL то не проводить проверку по источнику
-@app.get("/api/list/mods/{page_size}/{page_number}/{source}/{game_id}")
-async def mod_list(page_size: int, page_number: int, source: str, game_id: int):
+@app.get("/list/mods/{page_size}/{page_number}/{game_id}/{source}")
+async def mod_list(page_size: int, page_number: int, game_id: int, source: str):
     cursor = conn.cursor()
 
-    # Выполнение запроса с передачей значений фильтров
-    cursor.execute(f'''
-        SELECT * FROM downloaded_mods WHERE game_id = {game_id} AND source = "{source}" LIMIT {page_size} OFFSET {page_size*page_number}
-        ''')
+    #Составление запроса
+    req = f'FROM downloaded_mods WHERE game_id = {game_id} '
+    if source != "ALL":
+        req += f'AND source = "{source}"'
+
+    # Выполнение запроса
+    cursor.execute('SELECT * '+req+f' LIMIT {page_size} OFFSET {page_size*page_number}')
     # Получение результатов запроса
     results = cursor.fetchall()
 
     #Получаем размер базы данных
-    cursor.execute(f'''
-        SELECT COUNT(*) FROM downloaded_mods
-        ''')
+    cursor.execute('SELECT COUNT(*) '+req)
     database_size = cursor.fetchall()
     
     cursor.close()
-
     # Вывод результатов
     return {"database_size": database_size[0][0], "request": {"page_size": page_size, "page_number": page_number, "offeset": page_size*page_number, "source": source, "game_id": game_id}, "results": results}
 
-#TODO: Сделать функцию возвращающую массив всех игр к которым есть хотя бы один мод, входные данные - (размер страницы, номер страницы)
+@app.get("/list/games/{page_size}/{page_number}/{source}")
+async def games_list(page_size: int, page_number: int, source: str):
+    cursor = conn.cursor()
 
-#TODO: Сделать функцию возвращающую инфо о конкретном моде и его состоянии на сервере по фильтру ID, входные данные - (ID мода)
+    # Составление запроса
+    req = f'FROM games'
+    if source != "ALL":
+        req += f' WHERE source = "{source}"'
 
-#TODO: Сделать функцию возвращающую инфо о конкретной игре и её состоянии на сервере по фильтру ID, входные данные - (ID игры, источник (опционально))
+    # Выполнение запроса
+    cursor.execute('SELECT * '+req+f' LIMIT {page_size} OFFSET {page_size * page_number}')
+    # Получение результатов запроса
+    results = cursor.fetchall()
+
+    # Получаем размер базы данных
+    cursor.execute('SELECT COUNT(*) '+req)
+    database_size = cursor.fetchall()
+
+    cursor.close()
+    return {"database_size": database_size[0][0], "request": {"page_size": page_size, "page_number": page_number, "offeset": page_size*page_number, "source": source}, "results": results}
+
+
+@app.get("/info/game/{game_id}")
+async def game_info(game_id: int):
+    cursor = conn.cursor()
+
+    # Выполнение запроса
+    cursor.execute(f'SELECT * FROM games WHERE game_id = {game_id}')
+    # Получение результатов запроса
+    results = cursor.fetchall()
+    if results != None and len(results) > 0:
+        results = results[0]
+    else:
+        results = None
+
+    cursor.close()
+    return {"request": {"game_id": game_id}, "results": results}
+
+
+@app.get("/info/mod/{mod_id}")
+async def mod_info(mod_id: int):
+    cursor = conn.cursor()
+
+    # Составление запроса
+    req = 'SELECT * FROM '
+    est = f' WHERE mod_id = {mod_id}'
+
+    # Выполнение запроса
+    cursor.execute(req+'downloaded_mods'+est)
+    # Получение результатов запроса
+    results_downloaded = cursor.fetchall()
+    if results_downloaded != None and len(results_downloaded) > 0:
+        results_downloaded = results_downloaded[0]
+    else:
+        results_downloaded = None
+
+    # Выполнение запроса
+    cursor.execute(req+'requested_mods'+est)
+    # Получение результатов запроса
+    results_requested = cursor.fetchall()
+    if results_requested != None and len(results_requested) > 0:
+        results_requested = results_requested[0]
+    else:
+        results_requested = None
+
+    # Выполнение запроса
+    cursor.execute(req+'not_loaded_mods'+est)
+    # Получение результатов запроса
+    results_not_loaded = cursor.fetchall()
+    if results_not_loaded == None or len(results_not_loaded) <= 0:
+        results_not_loaded = None
+
+    cursor.close()
+
+    condition = -1
+    if results_downloaded != None: condition = 0
+    elif results_requested != None:
+        if results_not_loaded != None: condition = 1
+        else: condition = 2
+    elif results_not_loaded != None: condition = 3
+
+    return {"request": {"mod_id": mod_id}, "condition": condition, "downloaded": results_downloaded, "requested": results_requested, "not_loaded": results_not_loaded}
 
 
 def init():
