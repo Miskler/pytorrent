@@ -24,28 +24,6 @@ threads:dict = {}
 
 ##СДЕЛАТЬ СИСТЕМУ ЗАЩИТЫ, ЕСЛИ ПАПКА ЕСТЬ, НО ОНА НЕ ВНЕСЕНА В БАЗУ ДАННЫХ - СЧИТАЕМ БИТОЙ(Т.Е. СКАЧИВАТЬ НАЧАЛИ, НО НА КАКОМ-ТО ЭТАПЕ ПРЕРВАЛИ) И СКАЧИВАЕМ ЗАНОГО
 
-@app.get("/")
-async def root():
-    return {"message": WORKSHOP_DIR}
-
-@app.get("/t/{mod_id}")
-async def t(mod_id:int):
-    # Отправка запроса на сервер
-    response = requests.get(f'https://store.steampowered.com/app/{mod_id}')
-
-    # Создание объекта BeautifulSoup для парсинга HTML
-    soup = BeautifulSoup(response.text, 'html.parser')
-
-    # Найти div элемент с id "appHubAppName"
-    div_element = soup.find('div', id='appHubAppName')
-
-    # Вывод содержимого div элемента
-    if div_element:
-        return div_element.text
-    else:
-        return "Div элемент с id 'appHubAppName' не найден на странице."
-
-
 @app.get("/download/steam/{mod_id}")
 async def mod_dowloader_request(mod_id: int):
     cursor = conn.cursor()
