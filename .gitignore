@@ -6,6 +6,7 @@ __pycache__/
 backend/steam_client/
 backend/steamapps/workshop/
 backend/database.db
+backend/gunicorn_config.py
 
 # C extensions
 *.so
