@@ -22,9 +22,9 @@ threads:dict = {}
 
 @app.middleware("http")
 async def modify_request_header(request: Request, call_next):
-    request.headers["Access-Control-Allow-Origin"] = "*"
-    request.headers["Access-Control-Expose-Headers"] = "Content-Type"
     response = await call_next(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Expose-Headers"] = "Content-Type"
     return response
 
 @app.get("/download/steam/{mod_id}")
