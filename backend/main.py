@@ -6,7 +6,7 @@ import requests
 import tools
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from pysteamcmdwrapper import SteamCMD, SteamCMDException
 from swd import SteamWorkshopItem
@@ -20,9 +20,12 @@ steam = SteamCMD("steam_client")
 app = FastAPI()
 threads:dict = {}
 
-#БАЗА ДАННЫХ: id мода, id игры, дата обновления
-
-##СДЕЛАТЬ СИСТЕМУ ЗАЩИТЫ, ЕСЛИ ПАПКА ЕСТЬ, НО ОНА НЕ ВНЕСЕНА В БАЗУ ДАННЫХ - СЧИТАЕМ БИТОЙ(Т.Е. СКАЧИВАТЬ НАЧАЛИ, НО НА КАКОМ-ТО ЭТАПЕ ПРЕРВАЛИ) И СКАЧИВАЕМ ЗАНОГО
+@app.middleware("http")
+async def modify_request_header(request: Request, call_next):
+    request.headers["Access-Control-Allow-Origin"] = "*"
+    request.headers["Access-Control-Expose-Headers"] = "Content-Type"
+    response = await call_next(request)
+    return response
 
 @app.get("/download/steam/{mod_id}")
 async def mod_dowloader_request(mod_id: int):
