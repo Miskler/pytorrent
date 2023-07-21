@@ -39,14 +39,8 @@
 
 3. **Мод не найден:**
 ```
-{"message": "this mod was not found", "error_id": 2, "info": {"check_error": true / false, "search_error": true / false}}
+{"message": "this mod was not found", "error_id": 2}}
 ```
-* Сервер использует **API** [modsdownloader.com](https://modsdownloader.com/) для определения существует ли мод
-и получения некоторой дополнительной информации о моде. К сожаления этот сервис иногда может ложно сказать,
-что мода не существует. В будущем если я решу развивать этот сервис, 
-я начну использовать свой парсер для устранения этой проблемы.
-* `check_error` - если `true`, то [modsdownloader.com](https://modsdownloader.com/) не отвечает.
-* `search_error` - если `true`, то [modsdownloader.com](https://modsdownloader.com/) утверждает, что мода не существует.
 
 4. **Сервер уже пытается скачать этот мод:**
 ```
@@ -65,7 +59,7 @@
 
 **JSON ответ:**
 ```
-{"database_size": int, "request": {"page_size": int, "page_number": int, "offeset": int, "source": str, "game_id": int}, "results": list[list]}
+{"database_size": int, "offeset": int, "results": list[list]}
 ```
 * `database_size` - общий размер базы данных с текущими фильтрами *(`game_id` и `source`)*.
 * `request` - возвращает словарь с вашим запросом.
@@ -89,7 +83,7 @@
 
 **JSON ответ:**
 ```
-{"database_size": int, "request": {"page_size": int, "page_number": int, "offeset": int, "source": str}, "results": list[list]}
+{"database_size": int, "offeset": int, "results": list[list]}
 ```
 * `database_size` - общий размер базы данных с текущими фильтрами *(`source`)*.
 * `request` - возвращает словарь с вашим запросом.
@@ -108,7 +102,7 @@
 
 **JSON ответ:**
 ```
-{"request": {"mod_id": int}, "condition": int, "downloaded": list / null, "requested": list / null, "not_loaded": list[list] / null}
+{"condition": int, "downloaded": list / null, "requested": list / null, "not_loaded": list[list] / null}
 ```
 * `request` - возвращает словарь с вашим запросом.
 * `condition` - возвращает состояние на сервере в виде числа.
@@ -140,9 +134,8 @@
 
 **JSON ответ:**
 ```
-{"request": {"game_id": int}, "results": list / null}
+{"results": list / null}
 ```
-* `request` - возвращает словарь с вашим запросом.
 * `results` - возвращает массив в котором содержится информация об игре.
 Если игра не найдена, возвращает `null`. Содержание массива:
 * * 1. `game_id` *(int)*

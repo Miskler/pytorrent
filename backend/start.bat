@@ -1,2 +1,2 @@
 if not exist "steam_client" mkdir steam_client
-uvicorn main:app --host 5.44.41.136 --port 8000
+uvicorn main:app --host 127.0.0.1 --port 8000

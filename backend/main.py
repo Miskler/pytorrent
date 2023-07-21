@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from pysteamcmdwrapper import SteamCMD, SteamCMDException
-from swd import SteamWorkshopItem
+from steam_py import steam_tools as stt
 
 
 WORKSHOP_DIR = os.path.join(os.getcwd())
@@ -37,13 +37,9 @@ async def mod_dowloader_request(mod_id: int):
     rows = cursor.fetchall()
     path = 'steamapps/workshop/content/'
 
-    check_error = False
-    try:
-        item = SteamWorkshopItem(f'https://steamcommunity.com/sharedfiles/filedetails/?id={mod_id}')
-    except:
-        check_error = True
+    mod = stt.get_mod(mod_id)
 
-    if check_error or item.status != 1: #Проверяем, существует ли запрашиваемый мод на серверах Steam
+    if mod == None: #Проверяем, существует ли запрашиваемый мод на серверах Steam
         if len(rows) > 0: #Если в БД уже есть запись об этом моде
             path_real = path+f'{rows[0][0]}/{rows[0][1]}' # Получаем реальный путь до файла
             if os.path.isfile(path_real+'.zip'): #Если это ZIP архив - отправляем
@@ -62,14 +58,12 @@ async def mod_dowloader_request(mod_id: int):
                 cursor.close()
                 conn.commit()
 
-        return {"message": "this mod was not found", "error_id": 2, "info": {"check_error": check_error, "search_error": item.status != 1}}
-    elif threads.get(f"{item.game}/{mod_id}", None) != None and threads[f"{item.game}/{mod_id}"]: #Проверяем, загружаем ли этот ресурс прямо сейчас
+        return {"message": "this mod was not found", "error_id": 2}
+    elif threads.get(f"{str(mod['consumer_app_id'])}/{str(mod_id)}", None) != None and threads[f"{str(mod['consumer_app_id'])}/{str(mod_id)}"]: #Проверяем, загружаем ли этот ресурс прямо сейчас
         return {"message": "your request is already being processed", "error_id": 3}
 
-
-    real_path = path+f'{item.game}/{mod_id}'
+    real_path = path + f'{str(mod["consumer_app_id"])}/{str(mod_id)}'
     if (rows != None and len(rows) > 0) or os.path.isfile(real_path+'.zip') or os.path.isdir(real_path):  # Проверяем есть ли запись на сервере в каком-либо виде
-        update = True
         if (rows != None and len(rows) > 0) and os.path.isfile(real_path+'.zip'):  # Если это ZIP архив - отправляем
             db_datetime = datetime.strptime(rows[0][4], '%Y-%m-%d %H:%M:%S')
             # Вычисление разницы во времени
@@ -77,7 +71,6 @@ async def mod_dowloader_request(mod_id: int):
 
             # Проверка, нужно ли обновить мод
             if time_difference <= timedelta(days=7):
-                update = False
                 return FileResponse(real_path+'.zip', filename=f"{mod_id}.zip")
         elif (rows != None and len(rows) > 0) and os.path.isdir(real_path):  # Если это по какой-то причине - папка
             db_datetime = datetime.strptime(rows[0][4], '%Y-%m-%d %H:%M:%S')
@@ -86,7 +79,6 @@ async def mod_dowloader_request(mod_id: int):
 
             # Проверка, нужно ли обновить мод
             if time_difference <= timedelta(days=7):
-                update = False
                 # Пытаемся фиксануть проблему
                 tools.zipping(game_id=rows[0][0], mod_id=mod_id)
                 # Шлем пользователю
@@ -100,7 +92,7 @@ async def mod_dowloader_request(mod_id: int):
 
         cursor = conn.cursor()
         cursor.execute(f'''
-                    DELETE FROM downloaded_mods WHERE mod_id = {int(mod_id)} AND source = "steam"
+                    DELETE FROM downloaded_mods WHERE mod_id = {str(mod_id)} AND source = "steam"
                     ''')
         cursor.close()
         conn.commit()
@@ -111,34 +103,34 @@ async def mod_dowloader_request(mod_id: int):
     #Делаем запрос с целью выйснить были ли неудачные попытки
     cursor.execute(f'''
             SELECT * FROM not_loaded_mods
-            WHERE mod_id = {int(mod_id)} AND source = "steam"
+            WHERE mod_id = {str(mod_id)} AND source = "steam"
         ''')
     rows = cursor.fetchall()
-
-    #Загружаем мод на сервер
-    cursor.execute(f'''
-        INSERT INTO requested_mods (game_id, mod_id, mod_name, mod_size, data_event, source)
-        VALUES ({int(item.game)}, {int(mod_id)}, "{str(item.title)}", {int(item.size)}, datetime('now'), "steam");
-    ''')
     cursor.close()
-    conn.commit()
-    threading.Thread(target=mod_dowload, args=(item.game, mod_id, ), name=f"{item.game}/{mod_id}").start()
+
+    threading.Thread(target=mod_dowload, args=(mod,), name=f"{str(mod['consumer_app_id'])}/{str(mod_id)}").start()
     #Оповещаем пользователя, что его запрос принят в обработку
     return {"message": "request added to queue", "error_id": 0, "unsuccessful_attempts": rows != None and len(rows) > 0}
-def mod_dowload(game_id: int, mod_id: int, mod_name: str = "mod"):
+def mod_dowload(mod_data:dict):
     global threads
     #Ставим задачу загрузить мод
-    threads[f"{game_id}/{mod_id}"] = True
-    print(f"Поставлена задача на загрузку: {game_id}/{mod_id}")
-    steam.workshop_update(app_id=game_id, workshop_id=mod_id, install_dir=WORKSHOP_DIR)
-
-    ok = tools.zipping(game_id=game_id, mod_id=mod_id)
+    threads[f"{mod_data['consumer_app_id']}/{mod_data['publishedfileid']}"] = True
 
     conn_sql = sqlite3.connect('database.db')
-
     cursor = conn_sql.cursor()
 
-    print(f"Загрузка завершена: {game_id}/{mod_id}")
+    #Заносим в БД
+    cursor.execute(f'''
+        INSERT INTO requested_mods (game_id, mod_id, mod_name, mod_size, data_event, source)
+        VALUES ({mod_data['consumer_app_id']}, {mod_data['publishedfileid']}, "{mod_data['title']}", {mod_data["file_size"]}, datetime('now'), "steam");
+    ''')
+
+    print(f"Поставлена задача на загрузку: {mod_data['consumer_app_id']}/{mod_data['publishedfileid']}")
+    steam.workshop_update(app_id=mod_data['consumer_app_id'], workshop_id=mod_data['publishedfileid'], install_dir=WORKSHOP_DIR)
+
+    ok = tools.zipping(game_id=mod_data['consumer_app_id'], mod_id=mod_data['publishedfileid'])
+
+    print(f"Загрузка завершена: {mod_data['consumer_app_id']}/{mod_data['publishedfileid']}")
 
     if ok: #Если загрузка прошла успешно
         cursor.execute(f'''
@@ -151,39 +143,30 @@ def mod_dowload(game_id: int, mod_id: int, mod_name: str = "mod"):
                   , data_event
                   , source
                 FROM requested_mods
-                WHERE game_id = {int(game_id)} AND mod_id = {int(mod_id)} AND source = "steam"
+                WHERE game_id = {int(mod_data['consumer_app_id'])} AND mod_id = {int(mod_data['publishedfileid'])} AND source = "steam"
             ''')
 
         #Если мод ранее не могли загрузить, но сейчас загрузили - удаляем из списка не загруженных
         cursor.execute(f'''
-                DELETE FROM not_loaded_mods WHERE game_id = {int(game_id)} AND mod_id = {int(mod_id)}
+                DELETE FROM not_loaded_mods WHERE game_id = {int(mod_data['consumer_app_id'])} AND mod_id = {int(int(mod_data['publishedfileid']))}
                 ''')
         conn_sql.commit()
 
         cursor.execute(f'''
                     SELECT * FROM games
-                    WHERE game_id = {int(game_id)} AND source = "steam"
+                    WHERE game_id = {int(mod_data['consumer_app_id'])} AND source = "steam"
                 ''')
         conn_sql.commit()
         rows = cursor.fetchall()
         if rows == None or len(rows) <= 0:
             # Отправка запроса на сервер
-            try:
-                response = requests.get(f'https://store.steampowered.com/app/{game_id}')
-
-                # Создание объекта BeautifulSoup для парсинга HTML
-                soup = BeautifulSoup(response.text, 'html.parser')
-
-                # Найти div элемент с id "appHubAppName"
-                div_element = soup.find('div', id='appHubAppName')
-
+            dat = stt.get_app(mod_data["consumer_app_id"])
+            if dat != None:
                 conn_sql.commit()
                 cursor.execute(f'''
                     INSERT INTO games (game_id, game_name, data_event, source)
-                    VALUES ({int(game_id)}, "{div_element.text}", datetime('now'), "steam");
+                    VALUES ({mod_data["consumer_app_id"]}, "{dat['name']}", datetime('now'), "steam");
                 ''')
-            except:
-                print(f"Ожидание имени игры окончено ошибкой ({game_id})")
     else: #Если загрузка окончена ошибкой
         cursor.execute(f'''
                 INSERT INTO not_loaded_mods
@@ -195,20 +178,20 @@ def mod_dowload(game_id: int, mod_id: int, mod_name: str = "mod"):
                   , data_event
                   , source
                 FROM requested_mods
-                WHERE game_id = {int(game_id)} AND mod_id = {int(mod_id)} AND source = "steam"
+                WHERE game_id = {int(mod_data["consumer_app_id"])} AND mod_id = {int(mod_data['publishedfileid'])} AND source = "steam"
             ''')
     cursor.close()
     conn_sql.commit()
 
     cursor = conn_sql.cursor()
     cursor.execute(f'''
-            DELETE FROM requested_mods WHERE game_id = {int(game_id)} AND mod_id = {int(mod_id)} AND source = "steam"
+            DELETE FROM requested_mods WHERE game_id = {int(mod_data["consumer_app_id"])} AND mod_id = {int(mod_data['publishedfileid'])} AND source = "steam"
             ''')
     cursor.close()
     conn_sql.commit()
 
     conn_sql.close()
-    del threads[f"{game_id}/{mod_id}"]
+    del threads[f"{mod_data['consumer_app_id']}/{mod_data['publishedfileid']}"]
 
 
 @app.get("/list/mods/{page_size}/{page_number}/{game_id}/{source}")
@@ -231,7 +214,7 @@ async def mod_list(page_size: int, page_number: int, game_id: int, source: str):
     
     cursor.close()
     # Вывод результатов
-    return {"database_size": database_size[0][0], "request": {"page_size": page_size, "page_number": page_number, "offeset": page_size*page_number, "source": source, "game_id": game_id}, "results": results}
+    return {"database_size": database_size[0][0], "offeset": page_size*page_number, "results": results}
 
 @app.get("/list/games/{page_size}/{page_number}/{source}")
 async def games_list(page_size: int, page_number: int, source: str):
@@ -242,8 +225,9 @@ async def games_list(page_size: int, page_number: int, source: str):
     if source != "ALL":
         req += f' WHERE source = "{source}"'
 
+    offeset = page_size * page_number
     # Выполнение запроса
-    cursor.execute('SELECT * '+req+f' LIMIT {page_size} OFFSET {page_size * page_number}')
+    cursor.execute('SELECT * '+req+f' LIMIT {page_size} OFFSET {offeset}')
     # Получение результатов запроса
     results = cursor.fetchall()
 
@@ -252,7 +236,7 @@ async def games_list(page_size: int, page_number: int, source: str):
     database_size = cursor.fetchall()
 
     cursor.close()
-    return {"database_size": database_size[0][0], "request": {"page_size": page_size, "page_number": page_number, "offeset": page_size*page_number, "source": source}, "results": results}
+    return {"database_size": database_size[0][0], "offeset": offeset, "results": results}
 
 
 @app.get("/info/game/{game_id}")
@@ -269,7 +253,7 @@ async def game_info(game_id: int):
         results = None
 
     cursor.close()
-    return {"request": {"game_id": game_id}, "results": results}
+    return {"results": results}
 
 
 @app.get("/info/mod/{mod_id}")
@@ -314,7 +298,7 @@ async def mod_info(mod_id: int):
         else: condition = 2
     elif results_not_loaded != None: condition = 3
 
-    return {"request": {"mod_id": mod_id}, "condition": condition, "downloaded": results_downloaded, "requested": results_requested, "not_loaded": results_not_loaded}
+    return {"condition": condition, "downloaded": results_downloaded, "requested": results_requested, "not_loaded": results_not_loaded}
 
 
 def init():
