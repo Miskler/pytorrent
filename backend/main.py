@@ -2,9 +2,7 @@ import os
 import threading
 import sqlite3
 import shutil
-import requests
 import tools
-from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
@@ -24,7 +22,7 @@ threads:dict = {}
 async def modify_request_header(request: Request, call_next):
     response = await call_next(request)
     response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Expose-Headers"] = "Content-Type"
+    response.headers["Access-Control-Expose-Headers"] = "Content-Disposition"
     return response
 
 @app.get("/download/steam/{mod_id}")

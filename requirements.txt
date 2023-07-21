@@ -109,3 +109,5 @@ websockets==10.4
 Werkzeug==2.2.2
 yarl==1.8.1
 zstandard==0.21.0
+
+telegram~=0.0.1
