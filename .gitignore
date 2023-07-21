@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 
 .idea/
+telegram_bot/key.json
 backend/steam_client/
 backend/steamapps/workshop/
 backend/database.db
