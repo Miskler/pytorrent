@@ -22,7 +22,7 @@ threads:dict = {}
 async def modify_request_header(request: Request, call_next):
     response = await call_next(request)
     response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Expose-Headers"] = "Content-Disposition"
+    response.headers["Access-Control-Expose-Headers"] = "Content-Type,Content-Disposition"
     return response
 
 @app.get("/download/steam/{mod_id}")
