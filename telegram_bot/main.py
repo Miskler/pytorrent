@@ -77,7 +77,7 @@ async def echo_message(message):
                             elif data["condition"] == 0:
                                 try:
                                     result = requests.get(
-                                        url=f"https://43093.zetalink.ru:8000/download/steam/{str(mes)}", timeout=10)
+                                        url=f"https://43093.zetalink.ru:8000/download/{str(mes)}", timeout=10)
                                 except:
                                     await bot.reply_to(message, "Похоже, что сервер не отвечает 😔 _(point=1)_", parse_mode="Markdown")
                                     return -1
