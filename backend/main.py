@@ -41,13 +41,13 @@ async def mod_dowloader_request(mod_id: int):
 
     if mod == None: # Проверяем, существует ли запрашиваемый мод на серверах Steam
         output = stt.checker(rows=rows, path=path, mod_id=mod_id, conn=conn)
-        if output is FileResponse:
+        if type(output) is FileResponse:
             return output
 
         return {"message": "this mod was not found", "error_id": 2}
     elif threads.get(f"{str(mod['consumer_app_id'])}/{str(mod_id)}", None) != None and threads[f"{str(mod['consumer_app_id'])}/{str(mod_id)}"]: # Проверяем, загружаем ли этот ресурс прямо сейчас
         output = stt.checker(rows=rows, path=path, mod_id=mod_id, conn=conn)
-        if output is FileResponse:
+        if type(output) is FileResponse:
             del threads[f"{str(mod['consumer_app_id'])}/{str(mod_id)}"]
             cursor.execute(f'''
                 DELETE FROM requested_mods WHERE mod_id = {int(mod_id)} AND source = "steam"
@@ -206,7 +206,7 @@ async def download(mod_id: int):
     if rows is not None and len(rows) > 0:
         path = 'steamapps/workshop/content/'
         output = stt.checker(rows=rows, path=path, mod_id=mod_id, conn=conn)
-        if output is FileResponse:
+        if type(output) is FileResponse:
             del threads[f"{str(rows[0])}/{str(mod_id)}"]
             cursor.execute(f'''
                 DELETE FROM requested_mods WHERE mod_id = {int(mod_id)}
