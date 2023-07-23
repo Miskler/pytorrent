@@ -2,12 +2,12 @@ import os
 import threading
 import sqlite3
 import shutil
-import tools
-from datetime import datetime, timedelta
+from tools import steam_tools as stt
+from tools import tools
+from datetime import datetime
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from pysteamcmdwrapper import SteamCMD, SteamCMDException
-from steam_py import steam_tools as stt
 
 
 WORKSHOP_DIR = os.path.join(os.getcwd())
@@ -16,10 +16,10 @@ WORKSHOP_DIR = os.path.join(os.getcwd())
 conn = sqlite3.connect('database.db')
 steam = SteamCMD("steam_client")
 app = FastAPI()
-threads:dict = {}
+threads: dict = {}
 
 @app.middleware("http")
-async def modify_request_header(request: Request, call_next):
+async def modify_header(request: Request, call_next):
     response = await call_next(request)
     response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Access-Control-Expose-Headers"] = "Content-Type,Content-Disposition"
@@ -27,6 +27,8 @@ async def modify_request_header(request: Request, call_next):
 
 @app.get("/download/steam/{mod_id}")
 async def mod_dowloader_request(mod_id: int):
+    global threads
+
     cursor = conn.cursor()
     cursor.execute(f'''
         SELECT * FROM downloaded_mods
@@ -35,52 +37,51 @@ async def mod_dowloader_request(mod_id: int):
     rows = cursor.fetchall()
     path = 'steamapps/workshop/content/'
 
-    mod = stt.get_mod(mod_id)
+    mod = stt.get_mod(str(mod_id))
 
-    if mod == None: #Проверяем, существует ли запрашиваемый мод на серверах Steam
-        if len(rows) > 0: #Если в БД уже есть запись об этом моде
-            path_real = path+f'{rows[0][0]}/{rows[0][1]}' # Получаем реальный путь до файла
-            if os.path.isfile(path_real+'.zip'): #Если это ZIP архив - отправляем
-                return FileResponse(path_real+'.zip', filename=f"{rows[0][2]}.zip")
-            elif os.path.isdir(path): #Если это по какой-то причине - папка
-                #Пытаемся фиксануть проблему
-                tools.zipping(game_id=rows[0][0], mod_id=mod_id)
-
-                #Шлем пользователю
-                return FileResponse(path_real+'.zip', filename=f"{rows[0][2]}.zip")
-            else: #Удаляем запись в БД как не действительную
-                cursor = conn.cursor()
-                cursor.execute(f'''
-                            DELETE FROM downloaded_mods WHERE mod_id = {int(mod_id)} AND source = "steam"
-                            ''')
-                cursor.close()
-                conn.commit()
+    if mod == None: # Проверяем, существует ли запрашиваемый мод на серверах Steam
+        output = stt.checker(rows=rows, path=path, mod_id=mod_id, conn=conn)
+        if output is FileResponse:
+            return output
 
         return {"message": "this mod was not found", "error_id": 2}
-    elif threads.get(f"{str(mod['consumer_app_id'])}/{str(mod_id)}", None) != None and threads[f"{str(mod['consumer_app_id'])}/{str(mod_id)}"]: #Проверяем, загружаем ли этот ресурс прямо сейчас
-        return {"message": "your request is already being processed", "error_id": 3}
+    elif threads.get(f"{str(mod['consumer_app_id'])}/{str(mod_id)}", None) != None and threads[f"{str(mod['consumer_app_id'])}/{str(mod_id)}"]: # Проверяем, загружаем ли этот ресурс прямо сейчас
+        output = stt.checker(rows=rows, path=path, mod_id=mod_id, conn=conn)
+        if output is FileResponse:
+            del threads[f"{str(mod['consumer_app_id'])}/{str(mod_id)}"]
+            cursor.execute(f'''
+                DELETE FROM requested_mods WHERE mod_id = {int(mod_id)} AND source = "steam"
+            ''')
+            conn.commit()
+            return output
+        else:
+            return {"message": "your request is already being processed", "error_id": 3}
 
     real_path = path + f'{str(mod["consumer_app_id"])}/{str(mod_id)}'
-    if (rows != None and len(rows) > 0) or os.path.isfile(real_path+'.zip') or os.path.isdir(real_path):  # Проверяем есть ли запись на сервере в каком-либо виде
+
+    updating = False
+    if (rows != None and len(rows) > 0) or os.path.isfile(real_path+'.zip') or os.path.isdir(real_path): # Проверяем есть ли запись на сервере в каком-либо виде
         if (rows != None and len(rows) > 0) and os.path.isfile(real_path+'.zip'):  # Если это ZIP архив - отправляем
+            mod_update = datetime.fromtimestamp(mod["time_updated"])
             db_datetime = datetime.strptime(rows[0][4], '%Y-%m-%d %H:%M:%S')
-            # Вычисление разницы во времени
-            time_difference = datetime.now() - db_datetime
 
             # Проверка, нужно ли обновить мод
-            if time_difference <= timedelta(days=7):
+            if db_datetime > mod_update: # дата добавления на сервер позже чем последнее обновление (не надо обновлять)
                 return FileResponse(real_path+'.zip', filename=f"{mod_id}.zip")
+            else:
+                updating = True
         elif (rows != None and len(rows) > 0) and os.path.isdir(real_path):  # Если это по какой-то причине - папка
+            mod_update = datetime.fromtimestamp(mod["time_updated"])
             db_datetime = datetime.strptime(rows[0][4], '%Y-%m-%d %H:%M:%S')
-            # Вычисление разницы во времени
-            time_difference = datetime.now() - db_datetime
 
             # Проверка, нужно ли обновить мод
-            if time_difference <= timedelta(days=7):
+            if db_datetime > mod_update: # дата добавления на сервер позже чем последнее обновление (не надо обновлять)
                 # Пытаемся фиксануть проблему
                 tools.zipping(game_id=rows[0][0], mod_id=mod_id)
                 # Шлем пользователю
                 return FileResponse(real_path+'.zip', filename=f"{rows[0][2]}.zip")
+            else:
+                updating = True
 
         # Чистим сервер
         if os.path.isdir(real_path):
@@ -92,11 +93,13 @@ async def mod_dowloader_request(mod_id: int):
         cursor.execute(f'''
                     DELETE FROM downloaded_mods WHERE mod_id = {str(mod_id)} AND source = "steam"
                     ''')
-        cursor.close()
         conn.commit()
 
     if threads["start"].is_alive(): #Проверяем, готов ли сервер обрабатывать запросы
         return {"message": "the server is not ready to process requests", "error_id": 1}
+
+    #Ставим задачу загрузить мод
+    threads[f"{mod['consumer_app_id']}/{str(mod_id)}"] = True
 
     #Делаем запрос с целью выйснить были ли неудачные попытки
     cursor.execute(f'''
@@ -108,12 +111,8 @@ async def mod_dowloader_request(mod_id: int):
 
     threading.Thread(target=mod_dowload, args=(mod,), name=f"{str(mod['consumer_app_id'])}/{str(mod_id)}").start()
     #Оповещаем пользователя, что его запрос принят в обработку
-    return {"message": "request added to queue", "error_id": 0, "unsuccessful_attempts": rows != None and len(rows) > 0}
+    return {"message": "request added to queue", "error_id": 0, "unsuccessful_attempts": rows != None and len(rows) > 0, "updating": updating}
 def mod_dowload(mod_data:dict):
-    global threads
-    #Ставим задачу загрузить мод
-    threads[f"{mod_data['consumer_app_id']}/{mod_data['publishedfileid']}"] = True
-
     conn_sql = sqlite3.connect('database.db')
     cursor = conn_sql.cursor()
 
@@ -151,9 +150,9 @@ def mod_dowload(mod_data:dict):
         conn_sql.commit()
 
         cursor.execute(f'''
-                    SELECT * FROM games
-                    WHERE game_id = {int(mod_data['consumer_app_id'])} AND source = "steam"
-                ''')
+            SELECT * FROM games
+            WHERE game_id = {int(mod_data['consumer_app_id'])} AND source = "steam"
+        ''')
         conn_sql.commit()
         rows = cursor.fetchall()
         if rows == None or len(rows) <= 0:
@@ -189,8 +188,37 @@ def mod_dowload(mod_data:dict):
     conn_sql.commit()
 
     conn_sql.close()
+
+    global threads
     del threads[f"{mod_data['consumer_app_id']}/{mod_data['publishedfileid']}"]
 
+@app.get("/download/{mod_id}")
+async def download(mod_id: int):
+    global threads
+
+    cursor = conn.cursor()
+    cursor.execute(f'''
+            SELECT * FROM downloaded_mods
+            WHERE mod_id = {int(mod_id)}
+        ''')
+    rows = cursor.fetchall()
+
+    if rows is not None and len(rows) > 0:
+        path = 'steamapps/workshop/content/'
+        output = stt.checker(rows=rows, path=path, mod_id=mod_id, conn=conn)
+        if output is FileResponse:
+            del threads[f"{str(rows[0])}/{str(mod_id)}"]
+            cursor.execute(f'''
+                DELETE FROM requested_mods WHERE mod_id = {int(mod_id)}
+            ''')
+            cursor.close()
+            conn.commit()
+            return output
+        else:
+            return {"message": "the mod is damaged", "error_id": 2, "test": rows}
+
+    cursor.close()
+    return {"message": "the mod is not on the server", "error_id": 1}
 
 @app.get("/list/mods/{page_size}/{page_number}/{game_id}/{source}")
 async def mod_list(page_size: int, page_number: int, game_id: int, source: str):
