@@ -44,13 +44,13 @@ def checker(rows, path, mod_id, conn):
     if rows is not None and len(rows) > 0:  # Если в БД уже есть запись об этом моде
         path_real = path + f'{rows[0][0]}/{rows[0][1]}'  # Получаем реальный путь до файла
         if os.path.isfile(path_real + '.zip'):  # Если это ZIP архив - отправляем
-            return [path_real + '.zip', f"{rows[0][2]}.zip"]
+            return FileResponse(path=path_real+'.zip', filename=f"{rows[0][2]}.zip")
         elif os.path.isdir(path):  # Если это по какой-то причине - папка
             # Пытаемся фиксануть проблему
             tools.zipping(game_id=rows[0][0], mod_id=mod_id)
 
             # Шлем пользователю
-            return [path_real + '.zip', f"{rows[0][2]}.zip"]
+            return FileResponse(path=path_real+'.zip', filename=f"{rows[0][2]}.zip")
         else:  # Удаляем запись в БД как не действительную
             cursor = conn.cursor()
             cursor.execute(f'''
