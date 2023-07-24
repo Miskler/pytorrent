@@ -61,13 +61,13 @@ async def echo_message(message):
                     if data.get("unsuccessful_attempts", None) == True:
                         await bot.reply_to(message, "Ранее этот мод не удавалось загрузить!", parse_mode="Markdown")
 
-                    for i in range(30):
+                    for i in range(60):
                         time.sleep(1)
                         try:
                             res = requests.get(url=f"https://43093.zetalink.ru:8000/info/mod/{str(mes)}",
                                                     timeout=10)
                         except:
-                            await bot.reply_to(message, "Похоже, что сервер не отвечает 😔")
+                            await bot.reply_to(message, "Похоже, что сервер не отвечает 😔 _(point=2)_", parse_mode="Markdown")
                             return -1
                         if res.headers.get('content-type') == "application/json":
                             data = json.loads(res.content)
@@ -79,7 +79,7 @@ async def echo_message(message):
                                     result = requests.get(
                                         url=f"https://43093.zetalink.ru:8000/download/{str(mes)}", timeout=10)
                                 except:
-                                    await bot.reply_to(message, "Похоже, что сервер не отвечает 😔 _(point=1)_", parse_mode="Markdown")
+                                    await bot.reply_to(message, "Похоже, что сервер не отвечает 😔 _(point=3)_", parse_mode="Markdown")
                                     return -1
 
                                 if result.headers.get('content-type') == "application/zip":
