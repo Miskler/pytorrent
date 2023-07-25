@@ -8,6 +8,7 @@ from datetime import datetime
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from pysteamcmdwrapper import SteamCMD, SteamCMDException
+from starlette.responses import JSONResponse, FileResponse, RedirectResponse
 
 
 WORKSHOP_DIR = os.path.join(os.getcwd())
@@ -15,7 +16,17 @@ WORKSHOP_DIR = os.path.join(os.getcwd())
 # Создание подключения к базе данных
 conn = sqlite3.connect('database.db')
 steam = SteamCMD("steam_client")
-app = FastAPI()
+app = FastAPI(
+    title="PyTorrent API",
+    contact={
+        "name": "GitHub",
+        "url": "https://github.com/Miskler/pytorrent"
+    },
+    license_info={
+        "name": "MPL-2.0 license",
+        "identifier": "MPL-2.0",
+    },
+)
 threads: dict = {}
 
 @app.middleware("http")
@@ -25,8 +36,21 @@ async def modify_header(request: Request, call_next):
     response.headers["Access-Control-Expose-Headers"] = "Content-Type,Content-Disposition"
     return response
 
+@app.get("/")
+async def main():
+    """
+    Переадресация на `/docs`
+    """
+    return RedirectResponse(url="/docs")
+
 @app.get("/download/steam/{mod_id}")
 async def mod_dowloader_request(mod_id: int):
+    """
+    Нужно передать `ID` мода **Steam**.
+    Если у сервера уже есть этот мод - он его отправит как `ZIP` архив со сжатием `ZIP_BZIP2`.
+    Если у сервера нет этого мода он отправит `JSON` с информацией о постановке мода на скачивание.
+    """
+
     global threads
 
     cursor = conn.cursor()
@@ -44,7 +68,7 @@ async def mod_dowloader_request(mod_id: int):
         if output is not None:
             return output
 
-        return {"message": "this mod was not found", "error_id": 2}
+        return JSONResponse(status_code=404, content={"message": "this mod was not found", "error_id": 2})
     elif threads.get(f"{str(mod['consumer_app_id'])}/{str(mod_id)}", None) != None and threads[f"{str(mod['consumer_app_id'])}/{str(mod_id)}"]: # Проверяем, загружаем ли этот ресурс прямо сейчас
         output = stt.checker(rows=rows, path=path, mod_id=mod_id, conn=conn)
         if output is not None:
@@ -55,7 +79,7 @@ async def mod_dowloader_request(mod_id: int):
             conn.commit()
             return output
         else:
-            return {"message": "your request is already being processed", "error_id": 3}
+            return JSONResponse(status_code=102, content={"message": "your request is already being processed", "error_id": 3})
 
     real_path = path + f'{str(mod["consumer_app_id"])}/{str(mod_id)}'
 
@@ -96,7 +120,7 @@ async def mod_dowloader_request(mod_id: int):
         conn.commit()
 
     if threads["start"].is_alive(): #Проверяем, готов ли сервер обрабатывать запросы
-        return {"message": "the server is not ready to process requests", "error_id": 1}
+        return JSONResponse(status_code=103, content={"message": "the server is not ready to process requests", "error_id": 1})
 
     #Ставим задачу загрузить мод
     threads[f"{mod['consumer_app_id']}/{str(mod_id)}"] = True
@@ -111,7 +135,7 @@ async def mod_dowloader_request(mod_id: int):
 
     threading.Thread(target=mod_dowload, args=(mod,), name=f"{str(mod['consumer_app_id'])}/{str(mod_id)}").start()
     #Оповещаем пользователя, что его запрос принят в обработку
-    return {"message": "request added to queue", "error_id": 0, "unsuccessful_attempts": rows != None and len(rows) > 0, "updating": updating}
+    return JSONResponse(status_code=202, content={"message": "request added to queue", "error_id": 0, "unsuccessful_attempts": rows != None and len(rows) > 0, "updating": updating})
 def mod_dowload(mod_data:dict):
     conn_sql = sqlite3.connect('database.db')
     cursor = conn_sql.cursor()
@@ -194,6 +218,12 @@ def mod_dowload(mod_data:dict):
 
 @app.get("/download/{mod_id}")
 async def download(mod_id: int):
+    """
+    Нужно передать `ID` мода.
+    Если у сервера уже есть этот мод - он его отправит как `ZIP` архив со сжатием `ZIP_BZIP2`.
+    Эта самая быстрая команда загрузки, но если на сервере не будет запрашиваемого мода никаких действий по его загрузке предпринято не будет.
+    """
+
     global threads
 
     cursor = conn.cursor()
@@ -214,15 +244,21 @@ async def download(mod_id: int):
             ''')
             cursor.close()
             conn.commit()
+
             return output
         else:
-            return {"message": "the mod is damaged", "error_id": 2, "test": rows}
+            return JSONResponse(status_code=404, content={"message": "the mod is damaged", "error_id": 2, "test": rows})
 
     cursor.close()
-    return {"message": "the mod is not on the server", "error_id": 1}
+
+    return JSONResponse(status_code=404, content={"message": "the mod is not on the server", "error_id": 1})
 
 @app.get("/list/mods/{page_size}/{page_number}/{game_id}/{source}")
 async def mod_list(page_size: int, page_number: int, game_id: int, source: str):
+    """
+    Возвращает список модов к конкретной игре, которые есть на сервере.
+    """
+
     cursor = conn.cursor()
 
     #Составление запроса
@@ -245,6 +281,10 @@ async def mod_list(page_size: int, page_number: int, game_id: int, source: str):
 
 @app.get("/list/games/{page_size}/{page_number}/{source}")
 async def games_list(page_size: int, page_number: int, source: str):
+    """
+    Возвращает список игр, моды к которым есть на сервере.
+    """
+
     cursor = conn.cursor()
 
     # Составление запроса
@@ -268,6 +308,10 @@ async def games_list(page_size: int, page_number: int, source: str):
 
 @app.get("/info/game/{game_id}")
 async def game_info(game_id: int):
+    """
+    Возвращает информацию об конкретном моде, а так же его состояние на сервере.
+    """
+
     cursor = conn.cursor()
 
     # Выполнение запроса
@@ -285,6 +329,10 @@ async def game_info(game_id: int):
 
 @app.get("/info/mod/{mod_id}")
 async def mod_info(mod_id: int):
+    """
+    Возвращает информацию о конкретной игре.
+    """
+
     cursor = conn.cursor()
 
     # Составление запроса
