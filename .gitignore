@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+backend/sql/
 .idea/
 telegram_bot/key.json
 backend/steam_client/

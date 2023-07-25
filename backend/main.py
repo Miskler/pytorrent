@@ -4,9 +4,10 @@ import sqlite3
 import shutil
 from tools import steam_tools as stt
 from tools import tools
+from tools import sql_data_client
+from tools import sql_statistics_client
 from datetime import datetime
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse
 from pysteamcmdwrapper import SteamCMD, SteamCMDException
 from starlette.responses import JSONResponse, FileResponse, RedirectResponse
 
@@ -385,6 +386,8 @@ def init():
         print("Steam клиент уже установлен, попробуйте использовать параметр --force для принудительной установки")
 
 if threads.get("start", None) == None:
+
+
     # Создание курсора
     cursor = conn.cursor()
     # Создание таблицы, если она не существует
