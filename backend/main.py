@@ -4,8 +4,11 @@ import sqlite3
 import shutil
 from tools import steam_tools as stt
 from tools import tools
-from tools import sql_data_client
-from tools import sql_statistics_client
+from tools import sql_data_client as sdc
+from tools import sql_statistics_client as ssc
+from sqlalchemy import create_engine, Column, Integer, String, delete, insert, select
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
 from fastapi import FastAPI, Request
 from pysteamcmdwrapper import SteamCMD, SteamCMDException
@@ -13,6 +16,7 @@ from starlette.responses import JSONResponse, FileResponse, RedirectResponse
 
 
 WORKSHOP_DIR = os.path.join(os.getcwd())
+path = 'steamapps/workshop/content/'
 
 # Создание подключения к базе данных
 conn = sqlite3.connect('database.db')
@@ -53,14 +57,15 @@ async def mod_dowloader_request(mod_id: int):
     """
 
     global threads
+    global path
 
-    cursor = conn.cursor()
-    cursor.execute(f'''
-        SELECT * FROM downloaded_mods
-        WHERE mod_id = {int(mod_id)} AND source = "steam"
-    ''')
-    rows = cursor.fetchall()
-    path = 'steamapps/workshop/content/'
+    # Создание сессии
+    Session = sessionmaker(bind=sdc.engine)
+
+    # Выполнение запроса
+    session = Session()
+    rows = session.query(sdc.Mod).filter(sdc.Mod.id == mod_id).all()
+    session.close()
 
     mod = stt.get_mod(str(mod_id))
 
@@ -74,10 +79,15 @@ async def mod_dowloader_request(mod_id: int):
         output = stt.checker(rows=rows, path=path, mod_id=mod_id, conn=conn)
         if output is not None:
             del threads[f"{str(mod['consumer_app_id'])}/{str(mod_id)}"]
-            cursor.execute(f'''
-                DELETE FROM requested_mods WHERE mod_id = {int(mod_id)} AND source = "steam"
-            ''')
-            conn.commit()
+
+            session = Session()
+            # Создание выражения DELETE
+            delete_statement = delete(sdc.Mod).where(sdc.Mod.id == mod_id, sdc.Mod.source == "steam")
+            # Выполнение операции DELETE
+            session.execute(delete_statement)
+            session.commit()
+            session.close()
+
             return output
         else:
             return JSONResponse(status_code=102, content={"message": "your request is already being processed", "error_id": 3})
@@ -114,11 +124,13 @@ async def mod_dowloader_request(mod_id: int):
         elif os.path.isfile(real_path+'.zip'):
             os.remove(real_path+'.zip')
 
-        cursor = conn.cursor()
-        cursor.execute(f'''
-                    DELETE FROM downloaded_mods WHERE mod_id = {str(mod_id)} AND source = "steam"
-                    ''')
-        conn.commit()
+        session = Session()
+        # Создание выражения DELETE
+        delete_statement = delete(sdc.Mod).where(sdc.Mod.id == mod_id, sdc.Mod.source == "steam")
+        # Выполнение операции DELETE
+        session.execute(delete_statement)
+        session.commit()
+        session.close()
 
     if threads["start"].is_alive(): #Проверяем, готов ли сервер обрабатывать запросы
         return JSONResponse(status_code=103, content={"message": "the server is not ready to process requests", "error_id": 1})
@@ -126,26 +138,32 @@ async def mod_dowloader_request(mod_id: int):
     #Ставим задачу загрузить мод
     threads[f"{mod['consumer_app_id']}/{str(mod_id)}"] = True
 
-    #Делаем запрос с целью выйснить были ли неудачные попытки
-    cursor.execute(f'''
-            SELECT * FROM not_loaded_mods
-            WHERE mod_id = {str(mod_id)} AND source = "steam"
-        ''')
-    rows = cursor.fetchall()
-    cursor.close()
-
     threading.Thread(target=mod_dowload, args=(mod,), name=f"{str(mod['consumer_app_id'])}/{str(mod_id)}").start()
     #Оповещаем пользователя, что его запрос принят в обработку
-    return JSONResponse(status_code=202, content={"message": "request added to queue", "error_id": 0, "unsuccessful_attempts": rows != None and len(rows) > 0, "updating": updating})
+    return JSONResponse(status_code=202, content={"message": "request added to queue", "error_id": 0, "updating": updating})
 def mod_dowload(mod_data:dict):
-    conn_sql = sqlite3.connect('database.db')
-    cursor = conn_sql.cursor()
+    # Создание выражения INSERT
+    insert_statement = insert(sdc.Mod).values(
+        id=mod_data['publishedfileid'],
+        name=mod_data['title'],
+        description=mod_data['description'],
+        size=mod_data['file_size'],
+        condition=1,
+        date_creation=mod_data['time_created'],
+        date_update=mod_data['time_updated'],
+        date_request=datetime.now(),
+        source="steam",
+        downloads=0
+    )
 
-    #Заносим в БД
-    cursor.execute(f'''
-        INSERT INTO requested_mods (game_id, mod_id, mod_name, mod_size, data_event, source)
-        VALUES ({mod_data['consumer_app_id']}, {mod_data['publishedfileid']}, "{mod_data['title']}", {mod_data["file_size"]}, datetime('now'), "steam");
-    ''')
+    # Создание сессии
+    Session = sessionmaker(bind=sdc.engine)
+    # Выполнение запроса
+    session = Session()
+    # Выполнение операции INSERT
+    session.execute(insert_statement)
+    session.commit()
+
 
     print(f"Поставлена задача на загрузку: {mod_data['consumer_app_id']}/{mod_data['publishedfileid']}")
     steam.workshop_update(app_id=mod_data['consumer_app_id'], workshop_id=mod_data['publishedfileid'], install_dir=WORKSHOP_DIR)
@@ -155,64 +173,39 @@ def mod_dowload(mod_data:dict):
     print(f"Загрузка завершена: {mod_data['consumer_app_id']}/{mod_data['publishedfileid']}")
 
     if ok: #Если загрузка прошла успешно
-        cursor.execute(f'''
-                INSERT INTO downloaded_mods
-                SELECT 
-                  game_id
-                  , mod_id
-                  , mod_name
-                  , mod_size
-                  , data_event
-                  , source
-                FROM requested_mods
-                WHERE game_id = {int(mod_data['consumer_app_id'])} AND mod_id = {int(mod_data['publishedfileid'])} AND source = "steam"
-            ''')
+        # TODO устанавливать тута тэги и зависимости
 
-        #Если мод ранее не могли загрузить, но сейчас загрузили - удаляем из списка не загруженных
-        cursor.execute(f'''
-                DELETE FROM not_loaded_mods WHERE game_id = {int(mod_data['consumer_app_id'])} AND mod_id = {int(int(mod_data['publishedfileid']))}
-                ''')
-        conn_sql.commit()
+        session.query(sdc.Game).filter_by(id=int(mod_data['publishedfileid'])).update({'condition': 0})
+        session.commit()
 
-        cursor.execute(f'''
-            SELECT * FROM games
-            WHERE game_id = {int(mod_data['consumer_app_id'])} AND source = "steam"
-        ''')
-        conn_sql.commit()
-        rows = cursor.fetchall()
+        # Создание выражения SELECT
+        select_statement = select().where(sdc.Game.id == int(mod_data['consumer_app_id']))
+        rows = session.execute(select_statement).fetchall()
         if rows == None or len(rows) <= 0:
             # Отправка запроса на сервер
             dat = stt.get_app(mod_data["consumer_app_id"])
             if dat != None:
-                conn_sql.commit()
-                cursor.execute(f'''
-                    INSERT INTO games (game_id, game_name, data_event, source)
-                    VALUES ({mod_data["consumer_app_id"]}, "{dat['name']}", datetime('now'), "steam");
-                ''')
+                insert_statement = insert(sdc.Game).values(
+                    id=mod_data["consumer_app_id"],
+                    name=dat['name'],
+                    type=dat['type'],
+                    logo=dat['header_image'],
+                    short_description=dat['short_description'],
+                    description=dat['description'],
+                    mods_downloads=0,
+                    creation_date=datetime.now(),
+                    source='steam'
+                )
+
+                # Выполнение операции INSERT
+                session.execute(insert_statement)
+                session.commit()
     else: #Если загрузка окончена ошибкой
-        cursor.execute(f'''
-                INSERT INTO not_loaded_mods
-                SELECT 
-                  game_id
-                  , mod_id
-                  , mod_name
-                  , mod_size
-                  , data_event
-                  , source
-                FROM requested_mods
-                WHERE game_id = {int(mod_data["consumer_app_id"])} AND mod_id = {int(mod_data['publishedfileid'])} AND source = "steam"
-            ''')
-    cursor.close()
-    conn_sql.commit()
-
-    cursor = conn_sql.cursor()
-    cursor.execute(f'''
-            DELETE FROM requested_mods WHERE game_id = {int(mod_data["consumer_app_id"])} AND mod_id = {int(mod_data['publishedfileid'])} AND source = "steam"
-            ''')
-    cursor.close()
-    conn_sql.commit()
-
-    conn_sql.close()
+        delete_statement = delete(sdc.mod).where(sdc.mod.id == int(mod_data['publishedfileid']))
+        # Выполнение операции DELETE
+        session.execute(delete_statement)
+        session.commit()
+    session.close()
 
     global threads
     del threads[f"{mod_data['consumer_app_id']}/{mod_data['publishedfileid']}"]
@@ -225,6 +218,7 @@ async def download(mod_id: int):
     Эта самая быстрая команда загрузки, но если на сервере не будет запрашиваемого мода никаких действий по его загрузке предпринято не будет.
     """
 
+    global path
     global threads
 
     cursor = conn.cursor()
@@ -235,7 +229,6 @@ async def download(mod_id: int):
     rows = cursor.fetchall()
 
     if rows is not None and len(rows) > 0:
-        path = 'steamapps/workshop/content/'
         output = stt.checker(rows=rows, path=path, mod_id=mod_id, conn=conn)
         if output is not None:
             if threads.get(f"{str(rows[0])}/{str(mod_id)}", None) != None:

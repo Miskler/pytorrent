@@ -3,6 +3,8 @@ import json
 import os
 import tools
 from fastapi.responses import FileResponse
+import requests
+from bs4 import BeautifulSoup
 
 headers = {
     "Content-type": "application/x-www-form-urlencoded",
@@ -23,6 +25,25 @@ def get_mod(id:str):
         print("Ошибка! Не удалось получить информацию о моде с серверов Valve :(")
 
     return JSON
+
+def get_dependencies(id):
+    d = 'https://steamcommunity.com/sharedfiles/filedetails/?id='
+    response = requests.get(d+id)
+
+    soup = BeautifulSoup(response.content, "html.parser")
+
+    # Используйте метод `find_all` для поиска всех элементов с классом "requiredItemsContainer" и id "RequiredItems"
+    containers = soup.find_all("div", class_="requiredItemsContainer", id="RequiredItems")
+
+    # Для каждого контейнера найдите все ссылки внутри него
+    f = []
+    for container in containers:
+        links = container.find_all("a")
+        for link in links:
+            f.append(link.get("href"))
+
+    return f
+
 
 def get_app(id:str):
     JSON = None
@@ -59,3 +80,5 @@ def checker(rows, path, mod_id, conn):
             cursor.close()
             conn.commit()
     return None
+
+#print(get_mod(3007127191))
