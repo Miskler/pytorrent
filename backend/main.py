@@ -2,13 +2,12 @@ import os
 import threading
 import sqlite3
 import shutil
-from tools import steam_tools as stt
-from tools import tools
-from tools import sql_data_client as sdc
-from tools import sql_statistics_client as ssc
-from sqlalchemy import create_engine, Column, Integer, String, delete, insert, select
+import steam_tools as stt
+import sql_data_client as sdc
+import tool
+import sql_statistics_client as stc
+from sqlalchemy import delete, insert
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
 from fastapi import FastAPI, Request
 from pysteamcmdwrapper import SteamCMD, SteamCMDException
@@ -70,13 +69,13 @@ async def mod_dowloader_request(mod_id: int):
     mod = stt.get_mod(str(mod_id))
 
     if mod == None: # Проверяем, существует ли запрашиваемый мод на серверах Steam
-        output = stt.checker(rows=rows, path=path, mod_id=mod_id, conn=conn)
+        output = stt.checker(rows=rows, path=path, mod_id=mod_id, conn=conn, session=session)
         if output is not None:
             return output
 
         return JSONResponse(status_code=404, content={"message": "this mod was not found", "error_id": 2})
     elif threads.get(f"{str(mod['consumer_app_id'])}/{str(mod_id)}", None) != None and threads[f"{str(mod['consumer_app_id'])}/{str(mod_id)}"]: # Проверяем, загружаем ли этот ресурс прямо сейчас
-        output = stt.checker(rows=rows, path=path, mod_id=mod_id, conn=conn)
+        output = stt.checker(rows=rows, path=path, mod_id=mod_id, conn=conn, session=session)
         if output is not None:
             del threads[f"{str(mod['consumer_app_id'])}/{str(mod_id)}"]
 
@@ -98,23 +97,25 @@ async def mod_dowloader_request(mod_id: int):
     if (rows != None and len(rows) > 0) or os.path.isfile(real_path+'.zip') or os.path.isdir(real_path): # Проверяем есть ли запись на сервере в каком-либо виде
         if (rows != None and len(rows) > 0) and os.path.isfile(real_path+'.zip'):  # Если это ZIP архив - отправляем
             mod_update = datetime.fromtimestamp(mod["time_updated"])
-            db_datetime = datetime.strptime(rows[0][4], '%Y-%m-%d %H:%M:%S')
+            db_datetime = rows[0].date_update
 
             # Проверка, нужно ли обновить мод
-            if db_datetime > mod_update: # дата добавления на сервер позже чем последнее обновление (не надо обновлять)
-                return FileResponse(real_path+'.zip', filename=f"{mod_id}.zip")
+            print(db_datetime, mod_update)
+            if db_datetime >= mod_update: # дата добавления на сервер позже чем последнее обновление (не надо обновлять)
+                return FileResponse(real_path+'.zip', filename=f"{rows[0].name}.zip")
             else:
                 updating = True
         elif (rows != None and len(rows) > 0) and os.path.isdir(real_path):  # Если это по какой-то причине - папка
             mod_update = datetime.fromtimestamp(mod["time_updated"])
-            db_datetime = datetime.strptime(rows[0][4], '%Y-%m-%d %H:%M:%S')
+            db_datetime = rows[0].date_update
 
             # Проверка, нужно ли обновить мод
-            if db_datetime > mod_update: # дата добавления на сервер позже чем последнее обновление (не надо обновлять)
+            print(db_datetime, mod_update)
+            if db_datetime >= mod_update: # дата добавления на сервер позже чем последнее обновление (не надо обновлять)
                 # Пытаемся фиксануть проблему
-                tools.zipping(game_id=rows[0][0], mod_id=mod_id)
+                tool.zipping(game_id=rows[0].id, mod_id=mod_id)
                 # Шлем пользователю
-                return FileResponse(real_path+'.zip', filename=f"{rows[0][2]}.zip")
+                return FileResponse(real_path+'.zip', filename=f"{rows[0].name}.zip")
             else:
                 updating = True
 
@@ -149,8 +150,8 @@ def mod_dowload(mod_data:dict):
         description=mod_data['description'],
         size=mod_data['file_size'],
         condition=1,
-        date_creation=mod_data['time_created'],
-        date_update=mod_data['time_updated'],
+        date_creation=datetime.fromtimestamp(mod_data['time_created']),
+        date_update=datetime.fromtimestamp(mod_data['time_updated']),
         date_request=datetime.now(),
         source="steam",
         downloads=0
@@ -168,19 +169,23 @@ def mod_dowload(mod_data:dict):
     print(f"Поставлена задача на загрузку: {mod_data['consumer_app_id']}/{mod_data['publishedfileid']}")
     steam.workshop_update(app_id=mod_data['consumer_app_id'], workshop_id=mod_data['publishedfileid'], install_dir=WORKSHOP_DIR)
 
-    ok = tools.zipping(game_id=mod_data['consumer_app_id'], mod_id=mod_data['publishedfileid'])
+    ok = tool.zipping(game_id=mod_data['consumer_app_id'], mod_id=mod_data['publishedfileid'])
 
     print(f"Загрузка завершена: {mod_data['consumer_app_id']}/{mod_data['publishedfileid']}")
 
     if ok: #Если загрузка прошла успешно
-        # TODO устанавливать тута тэги и зависимости
+        insert_statement = insert(sdc.games_mods).values(
+            mod_id=mod_data['publishedfileid'],
+            game_id=mod_data['consumer_app_id']
+        )
 
-        session.query(sdc.Game).filter_by(id=int(mod_data['publishedfileid'])).update({'condition': 0})
+        session.execute(insert_statement)
         session.commit()
 
-        # Создание выражения SELECT
-        select_statement = select().where(sdc.Game.id == int(mod_data['consumer_app_id']))
-        rows = session.execute(select_statement).fetchall()
+        session.query(sdc.Mod).filter_by(id=int(mod_data['publishedfileid'])).update({'condition': 0})
+        session.commit()
+
+        rows = session.query(sdc.Game).filter(sdc.Game.id == int(mod_data['consumer_app_id'])).all()
         if rows == None or len(rows) <= 0:
             # Отправка запроса на сервер
             dat = stt.get_app(mod_data["consumer_app_id"])
@@ -191,19 +196,54 @@ def mod_dowload(mod_data:dict):
                     type=dat['type'],
                     logo=dat['header_image'],
                     short_description=dat['short_description'],
-                    description=dat['description'],
+                    description=dat['detailed_description'],
                     mods_downloads=0,
                     creation_date=datetime.now(),
                     source='steam'
                 )
 
-                # Выполнение операции INSERT
                 session.execute(insert_statement)
                 session.commit()
-    else: #Если загрузка окончена ошибкой
-        delete_statement = delete(sdc.mod).where(sdc.mod.id == int(mod_data['publishedfileid']))
+
+        # TODO устанавливать тута тэги и зависимости
+        # Получаем теги
+        orig_tags = []
+        for t in mod_data['tags']:
+            orig_tags.append(t['tag'])
+        if len(orig_tags) > 0:
+            for tag in orig_tags:
+                # Создаем тег
+                result = session.query(sdc.ModTag).filter_by(name=tag).first()
+                if result is None:
+                    dat = sdc.ModTag(name=tag)
+                    session.add(dat)
+                    session.commit()
+                    session.refresh(dat)
+                    result = dat
+
+                # Проверяем зарегистрирован ли в разрешенных модах
+                output = session.query(sdc.allowed_mods_tags).filter_by(tag_id=result.id,
+                                                                        game_id=mod_data["consumer_app_id"]).first()
+                if output is None:
+                    insert_statement = insert(sdc.allowed_mods_tags).values(tag_id=result.id,
+                                                                            game_id=mod_data["consumer_app_id"])
+                    session.execute(insert_statement)
+
+                # Проверяем зарегистрирован ли в тегах мода
+                output = session.query(sdc.mods_tags).filter_by(tag_id=result.id,
+                                                                mod_id=mod_data['publishedfileid']).first()
+                if output is None:
+                    insert_statement = insert(sdc.mods_tags).values(tag_id=result.id,
+                                                                    mod_id=mod_data['publishedfileid'])
+                    session.execute(insert_statement)
+        session.commit()
+    else:
+        # Если загрузка окончена ошибкой
+        delete_binding = delete(sdc.games_mods).where(sdc.games_mods.mod_id == int(mod_data['publishedfileid']))
+        delete_statement = delete(sdc.Mod).where(sdc.Mod.id == int(mod_data['publishedfileid']))
         # Выполнение операции DELETE
         session.execute(delete_statement)
+        session.execute(delete_binding)
         session.commit()
     session.close()
 
@@ -217,6 +257,7 @@ async def download(mod_id: int):
     Если у сервера уже есть этот мод - он его отправит как `ZIP` архив со сжатием `ZIP_BZIP2`.
     Эта самая быстрая команда загрузки, но если на сервере не будет запрашиваемого мода никаких действий по его загрузке предпринято не будет.
     """
+    #TODO обновить ветку download
 
     global path
     global threads
@@ -252,6 +293,7 @@ async def mod_list(page_size: int, page_number: int, game_id: int, source: str):
     """
     Возвращает список модов к конкретной игре, которые есть на сервере.
     """
+    # TODO обновить ветку mod_list
 
     cursor = conn.cursor()
 
@@ -278,6 +320,7 @@ async def games_list(page_size: int, page_number: int, source: str):
     """
     Возвращает список игр, моды к которым есть на сервере.
     """
+    # TODO обновить ветку games_list
 
     cursor = conn.cursor()
 
@@ -305,6 +348,7 @@ async def game_info(game_id: int):
     """
     Возвращает информацию об конкретном моде, а так же его состояние на сервере.
     """
+    # TODO обновить ветку game_info
 
     cursor = conn.cursor()
 
@@ -326,6 +370,7 @@ async def mod_info(mod_id: int):
     """
     Возвращает информацию о конкретной игре.
     """
+    # TODO обновить ветку mod_info
 
     cursor = conn.cursor()
 
@@ -373,13 +418,14 @@ async def mod_info(mod_id: int):
 def init():
     global steam
     try:
-        steam.install(force=True)
+        # TODO не забыть вернуть автообновление
+        steam.install(force=False)
         print("Установка клиента Steam завершена")
     except SteamCMDException:
         print("Steam клиент уже установлен, попробуйте использовать параметр --force для принудительной установки")
 
 if threads.get("start", None) == None:
-
+    # TODO обновить инициализацию
 
     # Создание курсора
     cursor = conn.cursor()

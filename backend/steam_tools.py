@@ -1,10 +1,11 @@
-import requests
 import json
 import os
-import tools
+import tool
 from fastapi.responses import FileResponse
 import requests
 from bs4 import BeautifulSoup
+from sqlalchemy import delete
+import sql_data_client as sdc
 
 headers = {
     "Content-type": "application/x-www-form-urlencoded",
@@ -61,24 +62,30 @@ def get_app(id:str):
     return JSON
 
 
-def checker(rows, path, mod_id, conn):
+def checker(rows, path, mod_id, conn, session):
     if rows is not None and len(rows) > 0:  # Если в БД уже есть запись об этом моде
-        path_real = path + f'{rows[0][0]}/{rows[0][1]}'  # Получаем реальный путь до файла
+        bind = session.query(sdc.games_mods).filter(sdc.games_mods.id == int(mod_id)).all()
+        if bind != None and len(bind) > 0:
+            bind = bind[0].game_id
+        else:
+            bind = "null"
+
+        path_real = path + f'{bind}/{mod_id}'  # Получаем реальный путь до файла
         if os.path.isfile(path_real + '.zip'):  # Если это ZIP архив - отправляем
-            return FileResponse(path=path_real+'.zip', filename=f"{rows[0][2]}.zip")
+            return FileResponse(path=path_real+'.zip', filename=f"{rows[0].name}.zip")
         elif os.path.isdir(path):  # Если это по какой-то причине - папка
             # Пытаемся фиксануть проблему
-            tools.zipping(game_id=rows[0][0], mod_id=mod_id)
+            tool.zipping(game_id=bind, mod_id=mod_id)
 
             # Шлем пользователю
-            return FileResponse(path=path_real+'.zip', filename=f"{rows[0][2]}.zip")
+            return FileResponse(path=path_real+'.zip', filename=f"{rows[0].name}.zip")
         else:  # Удаляем запись в БД как не действительную
-            cursor = conn.cursor()
-            cursor.execute(f'''
-                DELETE FROM downloaded_mods WHERE mod_id = {int(mod_id)} AND source = "steam"
-            ''')
-            cursor.close()
-            conn.commit()
+            delete_bind = delete(sdc.games_mods).where(sdc.games_mods.mod_id == int(mod_id))
+            delete_statement = delete(sdc.Mod).where(sdc.Mod.id == int(mod_id))
+            # Выполнение операции DELETE
+            session.execute(delete_statement)
+            session.execute(delete_bind)
+            session.commit()
     return None
 
 #print(get_mod(3007127191))
