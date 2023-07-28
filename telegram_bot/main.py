@@ -27,93 +27,96 @@ async def send_welcome(message):
 # Handle all other messages with content_type 'text' (content_types defaults to ['text'])
 @bot.message_handler(func=lambda message: True)
 async def echo_message(message):
-    start_time = time.time()
-    mes = message.text
+    try:
+        start_time = time.time()
+        mes = message.text
 
-    if mes.startswith("https://steamcommunity.com/sharedfiles/filedetails/") or mes.startswith("https://steamcommunity.com/workshop/filedetails/"):
-        parsed = urlparse(mes,
-                     "highlight=params#url-parsing")
-        captured_value = parse_qs(parsed.query)
-        try:
-            mes = captured_value['id'][0]
-        except:
-            await bot.reply_to(message, "Ты мне какую-то не правильную ссылку скинул! 🧐")
-
-    if mes.isdigit():
-        mes = int(mes)
-        if mes <= 0:
-            await bot.reply_to(message, "Я даже без проверки знаю, что такого мода нету :)")
-        else:
+        if mes.startswith("https://steamcommunity.com/sharedfiles/filedetails/") or mes.startswith("https://steamcommunity.com/workshop/filedetails/"):
+            parsed = urlparse(mes,
+                         "highlight=params#url-parsing")
+            captured_value = parse_qs(parsed.query)
             try:
-                result = requests.get(url=f"https://43093.zetalink.ru:8000/download/steam/{str(mes)}", timeout=5)
+                mes = captured_value['id'][0]
             except:
-                await bot.reply_to(message, "Похоже, что сервер не отвечает 😔 _(point=1)_", parse_mode="Markdown")
-                return -1
+                await bot.reply_to(message, "Ты мне какую-то не правильную ссылку скинул! 🧐")
 
-            if result.headers.get('content-type') == "application/zip":
-                await bot.send_document(message.chat.id, visible_file_name=f"{mes}.zip", document=result.content,
-                                        reply_to_message_id=message.id)
-                await bot.reply_to(message, f"Ваш запрос занял {round(time.time()-start_time, 1)} секунд")
-            elif result.headers.get('content-type') == "application/json":
-                data = json.loads(result.content)
-                if data["error_id"] == 0 or data["error_id"] == 3:
-                    await bot.reply_to(message, "На сервере нету этого мода, но он сейчас его загрузит!")
-                    if data.get("unsuccessful_attempts", None) == True:
-                        await bot.reply_to(message, "Ранее этот мод не удавалось загрузить!", parse_mode="Markdown")
-
-                    for i in range(60):
-                        time.sleep(1)
-                        try:
-                            res = requests.get(url=f"https://43093.zetalink.ru:8000/info/mod/{str(mes)}",
-                                                    timeout=10)
-                        except:
-                            await bot.reply_to(message, "Похоже, что сервер не отвечает 😔 _(point=2)_", parse_mode="Markdown")
-                            return -1
-                        if res.headers.get('content-type') == "application/json":
-                            data = json.loads(res.content)
-                            if data["condition"] == 3:
-                                await bot.reply_to(message, "Серверу не удалось загрузить этот мод 😢")
-                                return -1
-                            elif data["condition"] == 0:
-                                try:
-                                    result = requests.get(
-                                        url=f"https://43093.zetalink.ru:8000/download/{str(mes)}", timeout=10)
-                                except:
-                                    await bot.reply_to(message, "Похоже, что сервер не отвечает 😔 _(point=3)_", parse_mode="Markdown")
-                                    return -1
-
-                                if result.headers.get('content-type') == "application/zip":
-                                    await bot.send_document(message.chat.id, visible_file_name=f"{mes}.zip",
-                                                            document=result.content,
-                                                            reply_to_message_id=message.id)
-                                    await bot.reply_to(message, f"Ваш запрос занял {round(time.time()-start_time, 1)} секунд")
-                                else:
-                                    await bot.reply_to(message, "Сервер прислал неожиданный ответ 😧 _(point=4)_",
-                                                       parse_mode="Markdown")
-
-                                return
-                        else:
-                            await bot.reply_to(message, "Сервер прислал неожиданный ответ 😧 _(point=1)_", parse_mode="Markdown")
-                            return
-                    await bot.reply_to(message, "Превышено время ожидания ответа с сервера!")
+        if mes.isdigit():
+            mes = int(mes)
+            if mes <= 0:
+                await bot.reply_to(message, "Я даже без проверки знаю, что такого мода нету :)")
+            else:
+                try:
+                    result = requests.get(url=f"https://43093.zetalink.ru:8000/download/steam/{str(mes)}", timeout=5)
+                except:
+                    await bot.reply_to(message, "Похоже, что сервер не отвечает 😔 _(point=1)_", parse_mode="Markdown")
                     return -1
 
-                elif data["error_id"] == 1:
-                    await bot.reply_to(message,
-                        "Сервер запускается и не может сейчас грузить моды! Повтори попытку через пару минут :)")
-                elif data["error_id"] == 2:
-                    await bot.reply_to(message, "Сервер говорит что такого мода не существует 😢")
+                if result.headers.get('content-type') == "application/zip":
+                    await bot.send_document(message.chat.id, visible_file_name=f"{mes}.zip", document=result.content,
+                                            reply_to_message_id=message.id)
+                    await bot.reply_to(message, f"Ваш запрос занял {round(time.time()-start_time, 1)} секунд")
+                elif result.headers.get('content-type') == "application/json":
+                    data = json.loads(result.content)
+                    if data["error_id"] == 0 or data["error_id"] == 3:
+                        await bot.reply_to(message, "На сервере нету этого мода, но он сейчас его загрузит!")
+                        if data.get("unsuccessful_attempts", None) == True:
+                            await bot.reply_to(message, "Ранее этот мод не удавалось загрузить!", parse_mode="Markdown")
+
+                        for i in range(60):
+                            time.sleep(1)
+                            try:
+                                res = requests.get(url=f"https://43093.zetalink.ru:8000/info/mod/{str(mes)}",
+                                                        timeout=10)
+                            except:
+                                await bot.reply_to(message, "Похоже, что сервер не отвечает 😔 _(point=2)_", parse_mode="Markdown")
+                                return -1
+                            if res.headers.get('content-type') == "application/json":
+                                data = json.loads(res.content)
+                                if data["condition"] == 3:
+                                    await bot.reply_to(message, "Серверу не удалось загрузить этот мод 😢")
+                                    return -1
+                                elif data["condition"] == 0:
+                                    try:
+                                        result = requests.get(
+                                            url=f"https://43093.zetalink.ru:8000/download/{str(mes)}", timeout=10)
+                                    except:
+                                        await bot.reply_to(message, "Похоже, что сервер не отвечает 😔 _(point=3)_", parse_mode="Markdown")
+                                        return -1
+
+                                    if result.headers.get('content-type') == "application/zip":
+                                        await bot.send_document(message.chat.id, visible_file_name=f"{mes}.zip",
+                                                                document=result.content,
+                                                                reply_to_message_id=message.id)
+                                        await bot.reply_to(message, f"Ваш запрос занял {round(time.time()-start_time, 1)} секунд")
+                                    else:
+                                        await bot.reply_to(message, "Сервер прислал неожиданный ответ 😧 _(point=4)_",
+                                                           parse_mode="Markdown")
+
+                                    return
+                            else:
+                                await bot.reply_to(message, "Сервер прислал неожиданный ответ 😧 _(point=1)_", parse_mode="Markdown")
+                                return
+                        await bot.reply_to(message, "Превышено время ожидания ответа с сервера!")
+                        return -1
+
+                    elif data["error_id"] == 1:
+                        await bot.reply_to(message,
+                            "Сервер запускается и не может сейчас грузить моды! Повтори попытку через пару минут :)")
+                    elif data["error_id"] == 2:
+                        await bot.reply_to(message, "Сервер говорит что такого мода не существует 😢")
+                    else:
+                        await bot.reply_to(message, "Сервер прислал неожиданный ответ 😧 _(point=2)_", parse_mode="Markdown")
                 else:
-                    await bot.reply_to(message, "Сервер прислал неожиданный ответ 😧 _(point=2)_", parse_mode="Markdown")
-            else:
-                await bot.reply_to(message, "Сервер прислал неожиданный ответ 😧 _(point=3)_", parse_mode="Markdown")
-    else:
-        if mes.startswith("https://steamcommunity.com") or mes.startswith("https://store.steampowered.com"):
-            await bot.reply_to(message, "Мне нужна ссылка конкретно на мод! _(или его ID)_", parse_mode="Markdown")
-        elif mes.startswith("https://") or mes.startswith("http://"):
-            await bot.reply_to(message, "Пока что я умею скачивать только со Steam 😿")
+                    await bot.reply_to(message, "Сервер прислал неожиданный ответ 😧 _(point=3)_", parse_mode="Markdown")
         else:
-            await bot.reply_to(message, "Если ты хочешь скачать мод, то просто скинь ссылку или `ID` мода в чат!", parse_mode="Markdown")
+            if mes.startswith("https://steamcommunity.com") or mes.startswith("https://store.steampowered.com"):
+                await bot.reply_to(message, "Мне нужна ссылка конкретно на мод! _(или его ID)_", parse_mode="Markdown")
+            elif mes.startswith("https://") or mes.startswith("http://"):
+                await bot.reply_to(message, "Пока что я умею скачивать только со Steam 😿")
+            else:
+                await bot.reply_to(message, "Если ты хочешь скачать мод, то просто скинь ссылку или `ID` мода в чат!", parse_mode="Markdown")
+    except:
+        await bot.reply_to(message, "Ты вызвал странную ошибку...\nПопробуй загрузить мод еще раз!", parse_mode="Markdown")
 
 
 import asyncio

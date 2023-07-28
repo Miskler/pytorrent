@@ -6,13 +6,16 @@ import requests
 from bs4 import BeautifulSoup
 from sqlalchemy import delete
 import sql_data_client as sdc
+from sqlalchemy import delete, insert
+from datetime import datetime
+import asyncio
 
 headers = {
     "Content-type": "application/x-www-form-urlencoded",
     "Accept": "text/plain"
 }
 
-def get_mod(id:str):
+def get_mod(id:int):
     JSON = None
     try:
         response = requests.post(
@@ -27,26 +30,47 @@ def get_mod(id:str):
 
     return JSON
 
-def get_dependencies(id):
-    d = 'https://steamcommunity.com/sharedfiles/filedetails/?id='
-    response = requests.get(d+id)
+def get_html_data(id:int):
+    result = {"dependencies": [], "screenshots": []}
 
-    soup = BeautifulSoup(response.content, "html.parser")
+    try:
+        d = 'https://steamcommunity.com/sharedfiles/filedetails/?id='
+        response = requests.get(d+str(id), timeout=10)
 
-    # Используйте метод `find_all` для поиска всех элементов с классом "requiredItemsContainer" и id "RequiredItems"
-    containers = soup.find_all("div", class_="requiredItemsContainer", id="RequiredItems")
+        soup = BeautifulSoup(response.content, "html.parser")
 
-    # Для каждого контейнера найдите все ссылки внутри него
-    f = []
-    for container in containers:
-        links = container.find_all("a")
-        for link in links:
-            f.append(link.get("href"))
+        # Используйте метод `find_all` для поиска всех элементов с классом "requiredItemsContainer" и id "RequiredItems"
+        containers = soup.find_all("div", class_="requiredItemsContainer", id="RequiredItems")
 
-    return f
+        # Для каждого контейнера найдите все ссылки внутри него
+        for container in containers:
+            links = container.find_all("a")
+            for link in links:
+                out = link.get("href").removeprefix("https://steamcommunity.com/workshop/filedetails/?id=")
+                if out.isdigit():
+                    result["dependencies"].append(int(out))
 
 
-def get_app(id:str):
+        # Создаем объект Beautiful Soup для парсинга HTML-кода страницы
+        soup = BeautifulSoup(response.content, 'html.parser')
+
+        # Находим все элементы <a> с классом 'highlight_screenshot_link'
+        screenshot_links = soup.find_all('div', class_="screenshot_holder")#class_='highlight_player_item highlight_screenshot')
+
+        # Извлекаем ссылки на скриншоты
+        for div in screenshot_links:
+            lin = div.find('a')['href']
+            start_index = lin.find("'")+1
+            lin = str(lin[start_index:lin.find("'", start_index)])
+            if lin.startswith("https://"):
+                result["screenshots"].append(lin)
+    except:
+        print(f"Ошибка! Не удалось получить информацию о зависимостях мода! ({id})")
+
+    return result
+
+
+def get_app(id:int):
     JSON = None
     try:
         response = requests.get(f"https://store.steampowered.com/api/appdetails?appids={str(id)}&cc=tw",
@@ -88,4 +112,120 @@ def checker(rows, path, mod_id, conn, session):
             session.commit()
     return None
 
-#print(get_mod(3007127191))
+
+def setters(session, mod_data):
+    # Обновляем информацию о тегах (при этом удалив записи со старым вариантом связи их с конкретным модом)
+    delete_tags = sdc.mods_tags.delete().where(sdc.mods_tags.c.mod_id == int(mod_data['publishedfileid']))
+    session.execute(delete_tags)
+    session.commit()
+    set_tags(session=session, mod_data=mod_data)
+
+    delete_gen = sdc.game_genres.delete().where(sdc.game_genres.c.game_id == int(mod_data['consumer_app_id']))
+    session.execute(delete_gen)
+    session.commit()
+    set_game(session=session, mod_data=mod_data)
+
+    delete_dep = sdc.mods_dependencies.delete().where(sdc.mods_dependencies.c.mod_id == int(mod_data['publishedfileid']))
+    session.execute(delete_dep)
+    delete_screens = delete(sdc.ResourceMod).where(sdc.ResourceMod.owner_id == int(mod_data['publishedfileid']))
+    session.execute(delete_screens)
+    session.commit()
+    set_dependence_and_screenshots(session=session, mod_data=mod_data)
+
+    session.query(sdc.Mod).filter_by(id=int(mod_data['publishedfileid'])).update({'condition': 0})
+    session.commit()
+    session.close()
+
+def set_dependence_and_screenshots(session, mod_data):
+    dep = get_html_data(id=int(mod_data['publishedfileid']))
+
+    for d in dep["dependencies"]:
+        # Регистрируем зависимость
+        result = session.query(sdc.mods_dependencies).filter_by(dependence=d,
+                                                                mod_id=int(mod_data['publishedfileid'])).first()
+        if result is None:
+            ex = insert(sdc.mods_dependencies).values(mod_id=int(mod_data['publishedfileid']), dependence=int(d))
+            session.execute(ex)
+
+    for screenshot in dep["screenshots"]:
+        # Регистрируем скриншоты
+        result = session.query(sdc.ResourceMod).filter_by(url=screenshot).first()
+        if result is None:
+            ex = insert(sdc.ResourceMod).values(type="screenshot", url=screenshot, date_event=datetime.now(), owner_id=int(mod_data['publishedfileid']))
+            session.execute(ex)
+
+    # Регистрируем лого
+    result = session.query(sdc.ResourceMod).filter_by(url=mod_data['preview_url']).first()
+    if result is None:
+        ex = insert(sdc.ResourceMod).values(type="logo", url=mod_data['preview_url'], date_event=datetime.now(), owner_id=int(mod_data['publishedfileid']))
+        session.execute(ex)
+
+    session.commit()
+def set_tags(session, mod_data):
+    orig_tags = []
+    for t in mod_data['tags']:
+        orig_tags.append(t['tag'])
+    if len(orig_tags) > 0:
+        for tag in orig_tags:
+            # Создаем тег
+            result = session.query(sdc.ModTag).filter_by(name=tag).first()
+            if result is None:
+                dat = sdc.ModTag(name=tag)
+                session.add(dat)
+                session.commit()
+                session.refresh(dat)
+                result = dat
+
+            # Проверяем зарегистрирован ли в разрешенных модах
+            output = session.query(sdc.allowed_mods_tags).filter_by(tag_id=result.id,
+                                                                    game_id=mod_data["consumer_app_id"]).first()
+            if output is None:
+                insert_statement = insert(sdc.allowed_mods_tags).values(tag_id=result.id,
+                                                                        game_id=mod_data["consumer_app_id"])
+                session.execute(insert_statement)
+
+            # Проверяем зарегистрирован ли в тегах мода
+            output = session.query(sdc.mods_tags).filter_by(tag_id=result.id,
+                                                            mod_id=mod_data['publishedfileid']).first()
+            if output is None:
+                insert_statement = insert(sdc.mods_tags).values(tag_id=result.id,
+                                                                mod_id=mod_data['publishedfileid'])
+                session.execute(insert_statement)
+        session.commit()
+def set_game(session, mod_data):
+    rows = session.query(sdc.Game).filter(sdc.Game.id == int(mod_data['consumer_app_id'])).all()
+    if rows == None or len(rows) <= 0:
+        # Отправка запроса на сервер
+        dat = get_app(mod_data["consumer_app_id"])
+        if dat != None:
+            insert_statement = insert(sdc.Game).values(
+                id=mod_data["consumer_app_id"],
+                name=dat['name'],
+                type=dat['type'],
+                logo=dat['header_image'],
+                short_description=dat['short_description'],
+                description=dat['detailed_description'],
+                mods_downloads=0,
+                creation_date=datetime.now(),
+                source='steam'
+            )
+
+            session.execute(insert_statement)
+            session.commit()
+
+            for genre in dat['genres']:
+                # Создаем тег
+                result = session.query(sdc.Genres).filter_by(id=genre['id']).first()
+                if result is None:
+                    insert_genre = insert(sdc.Genres).values(id=genre['id'], name=genre.get('description', 'No data'))
+                    session.execute(insert_genre)
+                    session.commit()
+
+                # Проверяем зарегистрирован ли в разрешенных модах
+                output = session.query(sdc.game_genres).filter_by(game_id=mod_data["consumer_app_id"],
+                                                                  genre_id=genre['id']).first()
+                if output is None:
+                    insert_statement = insert(sdc.game_genres).values(game_id=mod_data["consumer_app_id"],
+                                                                      genre_id=genre['id'])
+                    session.execute(insert_statement)
+            session.commit()

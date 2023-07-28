@@ -8,19 +8,19 @@ base = declarative_base()
 
 
 # Связывающие БД
-game_tags = Table('unity_games_tags', base.metadata, # Теги для игр
+game_genres = Table('unity_games_genres', base.metadata, # Теги для игр
     Column('game_id', Integer, ForeignKey('games.id')),
-    Column('tag_id', Integer, ForeignKey('tags_for_games.id'))
+    Column('genre_id', Integer, ForeignKey('genres.id'))
 )
 
 allowed_mods_tags = Table('unity_allowed_mods_tags', base.metadata, # Разрешенные игрой теги для модов
     Column('game_id', Integer, ForeignKey('games.id')),
-    Column('tag_id', Integer, ForeignKey('tags_for_mods.id'))
+    Column('tag_id', Integer, ForeignKey('tags.id'))
 )
 
 mods_tags = Table('unity_mods_tags', base.metadata, # Теги для игр
     Column('mod_id', Integer, ForeignKey('mods.id')),
-    Column('tag_id', Integer, ForeignKey('tags_for_mods.id'))
+    Column('tag_id', Integer, ForeignKey('tags.id'))
 )
 
 games_mods = Table('unity_games_mods', base.metadata, # Принадлежность мода игре
@@ -52,7 +52,7 @@ class Game(base): # Таблица "игры"
 
     source = Column(String)
 
-    tags = relationship('GameTag', secondary=game_tags, backref='games')
+    genres = relationship('Genres', secondary=game_genres, backref='games')
     allowed_tags_for_mods = relationship('ModTag', secondary=allowed_mods_tags, backref='games')
 
 class Mod(base): # Таблица "моды"
@@ -79,8 +79,7 @@ class Mod(base): # Таблица "моды"
         foreign_keys=[mods_dependencies.c.mod_id, mods_dependencies.c.dependence]
     )
 
-    resources_id = Column(Integer, ForeignKey('resources_mods.id'))
-    resources_mods = relationship('ResourceMod', back_populates='owner')
+    #_resources_mods = relationship('ResourceMod', back_populates='mods', lazy='dynamic')
 
 class ResourceMod(base): # Ресурсы (скриншоты и лого)
     __tablename__ = 'resources_mods'
@@ -88,20 +87,18 @@ class ResourceMod(base): # Ресурсы (скриншоты и лого)
     type = Column(String)
     url = Column(String)
     date_event = Column(DateTime)
-    size = Column(Integer)
 
-    #mod_id = Column(Integer, ForeignKey('mods.id'))  # Внешний ключ на таблицу Mod
-    owner = relationship('Mod', back_populates='resources_mods')
+    owner_id = Column(Integer, ForeignKey('mods.id'))
 
 
 # Теги
-class GameTag(base): # Теги для игр
-    __tablename__ = 'tags_for_games'
+class Genres(base): # Жанры для игр
+    __tablename__ = 'genres'
     id = Column(Integer, primary_key=True)
     name = Column(String)
 
 class ModTag(base): # Теги для модов
-    __tablename__ = 'tags_for_mods'
+    __tablename__ = 'tags'
     id = Column(Integer, primary_key=True)
     name = Column(String)
 

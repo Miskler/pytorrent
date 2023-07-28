@@ -12,6 +12,7 @@ from datetime import datetime
 from fastapi import FastAPI, Request
 from pysteamcmdwrapper import SteamCMD, SteamCMDException
 from starlette.responses import JSONResponse, FileResponse, RedirectResponse
+import asyncio
 
 
 WORKSHOP_DIR = os.path.join(os.getcwd())
@@ -46,6 +47,15 @@ async def main():
     Переадресация на `/docs`
     """
     return RedirectResponse(url="/docs")
+
+@app.get("/t/{g}")
+async def t(g):
+    Session = sessionmaker(bind=sdc.engine)
+
+    # Создание сеанса с помощью контекстного менеджера
+    with Session() as session:
+        rows = session.query(sdc.Mod).filter(sdc.Mod.id == g).all()
+        return rows[0].tags
 
 @app.get("/download/steam/{mod_id}")
 async def mod_dowloader_request(mod_id: int):
@@ -125,13 +135,23 @@ async def mod_dowloader_request(mod_id: int):
         elif os.path.isfile(real_path+'.zip'):
             os.remove(real_path+'.zip')
 
-        session = Session()
-        # Создание выражения DELETE
-        delete_statement = delete(sdc.Mod).where(sdc.Mod.id == mod_id, sdc.Mod.source == "steam")
-        # Выполнение операции DELETE
-        session.execute(delete_statement)
-        session.commit()
-        session.close()
+        if not updating:
+            session = Session()
+            # Если загрузка окончена ошибкой
+            delete_binding = sdc.games_mods.delete().where(sdc.games_mods.c.mod_id == int(mod_id))
+            delete_statement = delete(sdc.Mod).where(sdc.Mod.id == int(mod_id))
+            delete_tags = sdc.mods_tags.delete().where(sdc.mods_tags.c.mod_id == int(mod_id))
+            delete_dep = sdc.mods_dependencies.delete().where(
+                sdc.mods_dependencies.c.mod_id == int(mod_id))
+            delete_resources = delete(sdc.ResourceMod).where(sdc.ResourceMod.owner_id == int(mod_id))
+            # Выполнение операции DELETE
+            session.execute(delete_statement)
+            session.execute(delete_binding)
+            session.execute(delete_tags)
+            session.execute(delete_dep)
+            session.execute(delete_resources)
+            session.commit()
+            session.close()
 
     if threads["start"].is_alive(): #Проверяем, готов ли сервер обрабатывать запросы
         return JSONResponse(status_code=103, content={"message": "the server is not ready to process requests", "error_id": 1})
@@ -139,30 +159,31 @@ async def mod_dowloader_request(mod_id: int):
     #Ставим задачу загрузить мод
     threads[f"{mod['consumer_app_id']}/{str(mod_id)}"] = True
 
-    threading.Thread(target=mod_dowload, args=(mod,), name=f"{str(mod['consumer_app_id'])}/{str(mod_id)}").start()
+    threading.Thread(target=mod_dowload, args=(mod, updating), name=f"{str(mod['consumer_app_id'])}/{str(mod_id)}").start()
     #Оповещаем пользователя, что его запрос принят в обработку
     return JSONResponse(status_code=202, content={"message": "request added to queue", "error_id": 0, "updating": updating})
-def mod_dowload(mod_data:dict):
-    # Создание выражения INSERT
-    insert_statement = insert(sdc.Mod).values(
-        id=mod_data['publishedfileid'],
-        name=mod_data['title'],
-        description=mod_data['description'],
-        size=mod_data['file_size'],
-        condition=1,
-        date_creation=datetime.fromtimestamp(mod_data['time_created']),
-        date_update=datetime.fromtimestamp(mod_data['time_updated']),
-        date_request=datetime.now(),
-        source="steam",
-        downloads=0
-    )
-
+def mod_dowload(mod_data:dict, update: bool = False):
     # Создание сессии
     Session = sessionmaker(bind=sdc.engine)
     # Выполнение запроса
     session = Session()
-    # Выполнение операции INSERT
-    session.execute(insert_statement)
+    if not update:
+        insert_statement = insert(sdc.Mod).values(
+            id=mod_data['publishedfileid'],
+            name=mod_data['title'],
+            description=mod_data['description'],
+            size=mod_data['file_size'],
+            condition=2,
+            date_creation=datetime.fromtimestamp(mod_data['time_created']),
+            date_update=datetime.fromtimestamp(mod_data['time_updated']),
+            date_request=datetime.now(),
+            source="steam",
+            downloads=0
+        )
+        # Выполнение операции INSERT
+        session.execute(insert_statement)
+    else:
+        session.query(sdc.Mod).filter_by(id=int(mod_data['publishedfileid'])).update({'condition': 2})
     session.commit()
 
 
@@ -180,72 +201,27 @@ def mod_dowload(mod_data:dict):
         )
 
         session.execute(insert_statement)
+        session.query(sdc.Mod).filter_by(id=int(mod_data['publishedfileid'])).update({'condition': 1})
         session.commit()
 
-        session.query(sdc.Mod).filter_by(id=int(mod_data['publishedfileid'])).update({'condition': 0})
-        session.commit()
+        threading.Thread(target=stt.setters, args=(session, mod_data,),
+                         name=f"{mod_data['consumer_app_id']}/{mod_data['publishedfileid']}/get_info").start()
 
-        rows = session.query(sdc.Game).filter(sdc.Game.id == int(mod_data['consumer_app_id'])).all()
-        if rows == None or len(rows) <= 0:
-            # Отправка запроса на сервер
-            dat = stt.get_app(mod_data["consumer_app_id"])
-            if dat != None:
-                insert_statement = insert(sdc.Game).values(
-                    id=mod_data["consumer_app_id"],
-                    name=dat['name'],
-                    type=dat['type'],
-                    logo=dat['header_image'],
-                    short_description=dat['short_description'],
-                    description=dat['detailed_description'],
-                    mods_downloads=0,
-                    creation_date=datetime.now(),
-                    source='steam'
-                )
-
-                session.execute(insert_statement)
-                session.commit()
-
-        # TODO устанавливать тута тэги и зависимости
-        # Получаем теги
-        orig_tags = []
-        for t in mod_data['tags']:
-            orig_tags.append(t['tag'])
-        if len(orig_tags) > 0:
-            for tag in orig_tags:
-                # Создаем тег
-                result = session.query(sdc.ModTag).filter_by(name=tag).first()
-                if result is None:
-                    dat = sdc.ModTag(name=tag)
-                    session.add(dat)
-                    session.commit()
-                    session.refresh(dat)
-                    result = dat
-
-                # Проверяем зарегистрирован ли в разрешенных модах
-                output = session.query(sdc.allowed_mods_tags).filter_by(tag_id=result.id,
-                                                                        game_id=mod_data["consumer_app_id"]).first()
-                if output is None:
-                    insert_statement = insert(sdc.allowed_mods_tags).values(tag_id=result.id,
-                                                                            game_id=mod_data["consumer_app_id"])
-                    session.execute(insert_statement)
-
-                # Проверяем зарегистрирован ли в тегах мода
-                output = session.query(sdc.mods_tags).filter_by(tag_id=result.id,
-                                                                mod_id=mod_data['publishedfileid']).first()
-                if output is None:
-                    insert_statement = insert(sdc.mods_tags).values(tag_id=result.id,
-                                                                    mod_id=mod_data['publishedfileid'])
-                    session.execute(insert_statement)
-        session.commit()
+        print(f"Процесс загрузки ({mod_data['consumer_app_id']}/{mod_data['publishedfileid']}) завершен! (успешно)")
     else:
         # Если загрузка окончена ошибкой
-        delete_binding = delete(sdc.games_mods).where(sdc.games_mods.mod_id == int(mod_data['publishedfileid']))
+        delete_binding = sdc.games_mods.delete().where(sdc.games_mods.c.mod_id == int(mod_data['publishedfileid']))
         delete_statement = delete(sdc.Mod).where(sdc.Mod.id == int(mod_data['publishedfileid']))
+        delete_tags = sdc.mods_tags.delete().where(sdc.mods_tags.c.mod_id == int(mod_data['publishedfileid']))
+        delete_dep = sdc.mods_dependencies.delete().where(sdc.mods_dependencies.c.mod_id == int(mod_data['publishedfileid']))
         # Выполнение операции DELETE
         session.execute(delete_statement)
         session.execute(delete_binding)
+        session.execute(delete_tags)
+        session.execute(delete_dep)
         session.commit()
-    session.close()
+        session.close()
+        print(f"Процесс загрузки ({mod_data['consumer_app_id']}/{mod_data['publishedfileid']}) завершен! (неудачно)")
 
     global threads
     del threads[f"{mod_data['consumer_app_id']}/{mod_data['publishedfileid']}"]
