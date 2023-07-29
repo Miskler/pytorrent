@@ -78,8 +78,7 @@ class Mod(base): # Таблица "моды"
         secondaryjoin=(mods_dependencies.c.dependence == id), backref='mods',
         foreign_keys=[mods_dependencies.c.mod_id, mods_dependencies.c.dependence]
     )
-
-    #_resources_mods = relationship('ResourceMod', back_populates='mods', lazy='dynamic')
+    games = relationship('Game', secondary=games_mods, backref='mods')
 
 class ResourceMod(base): # Ресурсы (скриншоты и лого)
     __tablename__ = 'resources_mods'

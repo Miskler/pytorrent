@@ -86,9 +86,9 @@ def get_app(id:int):
     return JSON
 
 
-def checker(rows, path, mod_id, conn, session):
+def checker(rows, path, mod_id, session):
     if rows is not None and len(rows) > 0:  # Если в БД уже есть запись об этом моде
-        bind = session.query(sdc.games_mods).filter(sdc.games_mods.id == int(mod_id)).all()
+        bind = session.query(sdc.games_mods).filter_by(mod_id=int(mod_id)).all()
         if bind != None and len(bind) > 0:
             bind = bind[0].game_id
         else:

@@ -2,6 +2,8 @@ from pathlib import Path
 import zipfile
 import os
 import shutil
+import sql_data_client as sdc
+from sqlalchemy.sql.expression import desc
 
 def zipping(game_id: int, mod_id: int) -> bool:
     # Запаковываем сохраненный мод в архив (для экономии места и трафика)
@@ -21,3 +23,34 @@ def zipping(game_id: int, mod_id: int) -> bool:
     # Удаление исходной папки и её содержимого
     shutil.rmtree(directory_path)
     return True
+
+def sort_mods(sort_by: str):
+    match sort_by:
+        case 'NAME':
+            return sdc.Mod.name
+        case 'iNAME':
+            return desc(sdc.Mod.name)
+        case 'SIZE':
+            return sdc.Mod.size
+        case 'iSIZE':
+            return desc(sdc.Mod.size)
+        case 'DATE_CREATION':
+            return sdc.Mod.date_creation
+        case 'iDATE_CREATION':
+            return desc(sdc.Mod.date_creation)
+        case 'DATE_UPDATE':
+            return sdc.Mod.date_update
+        case 'iDATE_UPDATE':
+            return desc(sdc.Mod.date_update)
+        case 'DATE_REQUEST':
+            return sdc.Mod.date_request
+        case 'iDATE_REQUEST':
+            return desc(sdc.Mod.date_request)
+        case 'SOURCE':
+            return sdc.Mod.source
+        case 'iSOURCE':
+            return desc(sdc.Mod.source)
+        case 'iDOWNLOADS':
+            return desc(sdc.Mod.downloads)
+        case _:
+            return sdc.Mod.downloads  # По умолчанию сортируем по загрузкам

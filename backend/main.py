@@ -12,7 +12,7 @@ from datetime import datetime
 from fastapi import FastAPI, Request
 from pysteamcmdwrapper import SteamCMD, SteamCMDException
 from starlette.responses import JSONResponse, FileResponse, RedirectResponse
-import asyncio
+
 
 
 WORKSHOP_DIR = os.path.join(os.getcwd())
@@ -79,13 +79,13 @@ async def mod_dowloader_request(mod_id: int):
     mod = stt.get_mod(str(mod_id))
 
     if mod == None: # Проверяем, существует ли запрашиваемый мод на серверах Steam
-        output = stt.checker(rows=rows, path=path, mod_id=mod_id, conn=conn, session=session)
+        output = stt.checker(rows=rows, path=path, mod_id=mod_id, session=session)
         if output is not None:
             return output
 
         return JSONResponse(status_code=404, content={"message": "this mod was not found", "error_id": 2})
     elif threads.get(f"{str(mod['consumer_app_id'])}/{str(mod_id)}", None) != None and threads[f"{str(mod['consumer_app_id'])}/{str(mod_id)}"]: # Проверяем, загружаем ли этот ресурс прямо сейчас
-        output = stt.checker(rows=rows, path=path, mod_id=mod_id, conn=conn, session=session)
+        output = stt.checker(rows=rows, path=path, mod_id=mod_id, session=session)
         if output is not None:
             del threads[f"{str(mod['consumer_app_id'])}/{str(mod_id)}"]
 
@@ -233,63 +233,91 @@ async def download(mod_id: int):
     Если у сервера уже есть этот мод - он его отправит как `ZIP` архив со сжатием `ZIP_BZIP2`.
     Эта самая быстрая команда загрузки, но если на сервере не будет запрашиваемого мода никаких действий по его загрузке предпринято не будет.
     """
-    #TODO обновить ветку download
 
     global path
     global threads
 
-    cursor = conn.cursor()
-    cursor.execute(f'''
-            SELECT * FROM downloaded_mods
-            WHERE mod_id = {int(mod_id)}
-        ''')
-    rows = cursor.fetchall()
+    # Создание сессии
+    Session = sessionmaker(bind=sdc.engine)
+    session = Session()
+    # Выполнение запроса
+    rows = session.query(sdc.Mod).filter(sdc.Mod.id == mod_id).all()
+    session.close()
 
     if rows is not None and len(rows) > 0:
-        output = stt.checker(rows=rows, path=path, mod_id=mod_id, conn=conn)
+        if rows[0].condition >= 2:
+            return JSONResponse(status_code=102, content={"message": "this mod is still loading", "error_id": 3})
+
+        output = stt.checker(rows=rows, path=path, mod_id=mod_id, session=session)
         if output is not None:
             if threads.get(f"{str(rows[0])}/{str(mod_id)}", None) != None:
                 del threads[f"{str(rows[0])}/{str(mod_id)}"]
-            cursor.execute(f'''
-                DELETE FROM requested_mods WHERE mod_id = {int(mod_id)}
-            ''')
-            cursor.close()
-            conn.commit()
 
             return output
         else:
             return JSONResponse(status_code=404, content={"message": "the mod is damaged", "error_id": 2, "test": rows})
 
-    cursor.close()
-
     return JSONResponse(status_code=404, content={"message": "the mod is not on the server", "error_id": 1})
 
-@app.get("/list/mods/{page_size}/{page_number}/{game_id}/{source}")
-async def mod_list(page_size: int, page_number: int, game_id: int, source: str):
+@app.post("/list/mods/")
+async def mod_list(data: dict = {"page_size": 10, "page": 0, "sort": "NO", "tags": [], "games": [], "name": "", "dependencies": []}):
     """
     Возвращает список модов к конкретной игре, которые есть на сервере.
+
+    О сортировке:
+    Префикс `i` указывает что сортировка должна быть инвертированной.
+    1. NAME - сортировка по имени.
+    2. SIZE - сортировка по размеру.
+    3. DATE_CREATION - сортировка по дате создания.
+    4. DATE_UPDATE - сортировка по дате обновления.
+    5. DATE_REQUEST - сортировка по дате последнего запроса.
+    6. SOURCE - сортировка по источнику.
+    7. DOWNLOADS (по умолчанию) - сортировка по колическу загрузок.
+
+    О фильтрации:
+    1. "tags" - передать список тегов которые должен содержать мод (по умолчанию пуст) (нужно передать ID тегов).
+    2. "games" - список игр к которым подходит мод.
+    Сервер учитывает что мод может подходить для нескольких игр, но обычно мод подходит только для одной игры.
+    3. "dependencies" - отфильтровывает моды в зависимостях которых не указан список этих модов.
+    4. "not_dependencies" - отфильтровывает моды в зависимостях которых указан список этих модов.
+    5. "primary_sources" - список допустимых первоисточников.
+    6. "name" - поиск по имени. Работает как проверка есть ли у мода в названии определенная последовательности символов.
     """
-    # TODO обновить ветку mod_list
+    # TODO дописать 3, 4, 5 и сделать защиту на не правильный тип данных в запросе.
 
-    cursor = conn.cursor()
 
-    #Составление запроса
-    req = f'FROM downloaded_mods WHERE game_id = {game_id} '
-    if source != "ALL":
-        req += f'AND source = "{source}"'
+    if (len(data.get("tags", []))+len(data.get("games", []))+len(data.get("dependencies", []))) >= 30:
+        return JSONResponse(status_code=413, content={"message": "the maximum complexity of filters is 30 elements in sum", "error_id": 2})
 
+    # Создание сессии
+    Session = sessionmaker(bind=sdc.engine)
+    session = Session()
     # Выполнение запроса
-    cursor.execute('SELECT * '+req+f' LIMIT {page_size} OFFSET {page_size*page_number}')
-    # Получение результатов запроса
-    results = cursor.fetchall()
+    query = session.query(sdc.Mod).order_by(tool.sort_mods(data.get("sort", "NO")))
 
-    #Получаем размер базы данных
-    cursor.execute('SELECT COUNT(*) '+req)
-    database_size = cursor.fetchall()
-    
-    cursor.close()
+    # Фильтрация по тегам
+    if len(data.get("tags", [])) > 0:
+        for tag_id in data["tags"]:
+            query = query.filter(sdc.Mod.tags.any(sdc.ModTag.id == tag_id))
+
+    # Фильтрация по играм
+    if len(data.get("games", [])) > 0:
+        for game_id in data["games"]:
+            query = query.filter(sdc.Mod.games.any(sdc.Game.id == game_id))
+
+    # Фильтрация по имени
+    if len(data.get("name", "")) > 0:
+        query = query.filter(sdc.Mod.name.ilike(f'%{data["name"]}%'))
+
+    mods_count = query.count()
+
+    offset = data.get("page_size", 10)*data.get("page", 0)
+    mods = query.offset(offset).limit(data.get("page_size", 10)).all()
+
+    session.close()
+
     # Вывод результатов
-    return {"database_size": database_size[0][0], "offeset": page_size*page_number, "results": results}
+    return {"database_size": mods_count, "offeset": offset, "results": mods}
 
 @app.get("/list/games/{page_size}/{page_number}/{source}")
 async def games_list(page_size: int, page_number: int, source: str):
