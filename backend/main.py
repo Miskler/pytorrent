@@ -48,14 +48,6 @@ async def main():
     """
     return RedirectResponse(url="/docs")
 
-@app.get("/t/{g}")
-async def t(g):
-    Session = sessionmaker(bind=sdc.engine)
-
-    # Создание сеанса с помощью контекстного менеджера
-    with Session() as session:
-        rows = session.query(sdc.Mod).filter(sdc.Mod.id == g).all()
-        return rows[0].tags
 
 @app.get("/download/steam/{mod_id}")
 async def mod_dowloader_request(mod_id: int):
@@ -259,10 +251,14 @@ async def download(mod_id: int):
 
     return JSONResponse(status_code=404, content={"message": "the mod is not on the server", "error_id": 1})
 
-@app.post("/list/mods/")
-async def mod_list(data: dict = {"page_size": 10, "page": 0, "sort": "NO", "tags": [], "games": [], "name": "", "dependencies": []}):
+@app.get("/list/mods/")
+async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", tags: list[int] = [],
+                   games: list[int] = [], dependencies: bool = False, primary_sources: list[str] = [], name: str = ""):
     """
     Возвращает список модов к конкретной игре, которые есть на сервере.
+
+    1. "page_size" - размер 1 страницы. Диапазон - 1...50 элементов.
+    2. "page" - номер странице. Не должна быть отрицательной.
 
     О сортировке:
     Префикс `i` указывает что сортировка должна быть инвертированной.
@@ -278,41 +274,48 @@ async def mod_list(data: dict = {"page_size": 10, "page": 0, "sort": "NO", "tags
     1. "tags" - передать список тегов которые должен содержать мод (по умолчанию пуст) (нужно передать ID тегов).
     2. "games" - список игр к которым подходит мод.
     Сервер учитывает что мод может подходить для нескольких игр, но обычно мод подходит только для одной игры.
-    3. "dependencies" - отфильтровывает моды в зависимостях которых не указан список этих модов.
-    4. "not_dependencies" - отфильтровывает моды в зависимостях которых указан список этих модов.
-    5. "primary_sources" - список допустимых первоисточников.
-    6. "name" - поиск по имени. Работает как проверка есть ли у мода в названии определенная последовательности символов.
+    3. "dependencies" - отфильтровывает моды у которых есть зависимости на другие моды.
+    4. "primary_sources" - список допустимых первоисточников.
+    5. "name" - поиск по имени.
+    Работает как проверка есть ли у мода в названии определенная последовательности символов.
     """
-    # TODO дописать 3, 4, 5 и сделать защиту на не правильный тип данных в запросе.
 
-
-    if (len(data.get("tags", []))+len(data.get("games", []))+len(data.get("dependencies", []))) >= 30:
+    if page_size > 50 or page_size < 1:
+        return JSONResponse(status_code=413, content={"message": "incorrect page size", "error_id": 1})
+    elif (len(tags)+len(games)+len(primary_sources)) >= 30:
         return JSONResponse(status_code=413, content={"message": "the maximum complexity of filters is 30 elements in sum", "error_id": 2})
 
     # Создание сессии
     Session = sessionmaker(bind=sdc.engine)
     session = Session()
     # Выполнение запроса
-    query = session.query(sdc.Mod).order_by(tool.sort_mods(data.get("sort", "NO")))
+    query = session.query(sdc.Mod).order_by(tool.sort_mods(sort))
 
     # Фильтрация по тегам
-    if len(data.get("tags", [])) > 0:
-        for tag_id in data["tags"]:
+    if len(tags) > 0:
+        for tag_id in tags:
             query = query.filter(sdc.Mod.tags.any(sdc.ModTag.id == tag_id))
 
     # Фильтрация по играм
-    if len(data.get("games", [])) > 0:
-        for game_id in data["games"]:
+    if len(games) > 0:
+        for game_id in games:
             query = query.filter(sdc.Mod.games.any(sdc.Game.id == game_id))
 
+    # Фильтрация по первоисточникам
+    if len(primary_sources) > 0:
+        query = query.filter(sdc.Mod.source.in_(primary_sources))
+
+    if dependencies:
+        query = query.outerjoin(sdc.mods_dependencies, sdc.Mod.id == sdc.mods_dependencies.c.mod_id).filter(sdc.mods_dependencies.c.mod_id == None)
+
     # Фильтрация по имени
-    if len(data.get("name", "")) > 0:
-        query = query.filter(sdc.Mod.name.ilike(f'%{data["name"]}%'))
+    if len(name) > 0:
+        query = query.filter(sdc.Mod.name.ilike(f'%{name}%'))
 
     mods_count = query.count()
 
-    offset = data.get("page_size", 10)*data.get("page", 0)
-    mods = query.offset(offset).limit(data.get("page_size", 10)).all()
+    offset = page_size*page
+    mods = query.offset(offset).limit(page_size).all()
 
     session.close()
 
