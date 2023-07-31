@@ -6,14 +6,16 @@ import steam_tools as stt
 import sql_data_client as sdc
 import tool
 import sql_statistics_client as stc
-from sqlalchemy import delete, insert
+from sqlalchemy import delete, insert, select
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 from fastapi import FastAPI, Request
 from pysteamcmdwrapper import SteamCMD, SteamCMDException
 from starlette.responses import JSONResponse, FileResponse, RedirectResponse
 
-
+# TODO перед отправкой на сервер протестировать все функции на работоспособность
+# TODO собирать статистику
+# TODO Обновлять mods_count у sdc.Game
 
 WORKSHOP_DIR = os.path.join(os.getcwd())
 path = 'steamapps/workshop/content/'
@@ -66,32 +68,18 @@ async def mod_dowloader_request(mod_id: int):
     # Выполнение запроса
     session = Session()
     rows = session.query(sdc.Mod).filter(sdc.Mod.id == mod_id).all()
-    session.close()
 
     mod = stt.get_mod(str(mod_id))
 
     if mod == None: # Проверяем, существует ли запрашиваемый мод на серверах Steam
         output = stt.checker(rows=rows, path=path, mod_id=mod_id, session=session)
         if output is not None:
+            tool.downloads_count_update(session=session, mod=rows)
             return output
 
         return JSONResponse(status_code=404, content={"message": "this mod was not found", "error_id": 2})
-    elif threads.get(f"{str(mod['consumer_app_id'])}/{str(mod_id)}", None) != None and threads[f"{str(mod['consumer_app_id'])}/{str(mod_id)}"]: # Проверяем, загружаем ли этот ресурс прямо сейчас
-        output = stt.checker(rows=rows, path=path, mod_id=mod_id, session=session)
-        if output is not None:
-            del threads[f"{str(mod['consumer_app_id'])}/{str(mod_id)}"]
-
-            session = Session()
-            # Создание выражения DELETE
-            delete_statement = delete(sdc.Mod).where(sdc.Mod.id == mod_id, sdc.Mod.source == "steam")
-            # Выполнение операции DELETE
-            session.execute(delete_statement)
-            session.commit()
-            session.close()
-
-            return output
-        else:
-            return JSONResponse(status_code=102, content={"message": "your request is already being processed", "error_id": 3})
+    elif threads.get(f"{str(mod['consumer_app_id'])}/{str(mod_id)}", None) == True: # Проверяем, загружаем ли этот ресурс прямо сейчас
+        return JSONResponse(status_code=102, content={"message": "your request is already being processed", "error_id": 3})
 
     real_path = path + f'{str(mod["consumer_app_id"])}/{str(mod_id)}'
 
@@ -104,6 +92,7 @@ async def mod_dowloader_request(mod_id: int):
             # Проверка, нужно ли обновить мод
             print(db_datetime, mod_update)
             if db_datetime >= mod_update: # дата добавления на сервер позже чем последнее обновление (не надо обновлять)
+                tool.downloads_count_update(session=session, mod=rows)
                 return FileResponse(real_path+'.zip', filename=f"{rows[0].name}.zip")
             else:
                 updating = True
@@ -117,6 +106,7 @@ async def mod_dowloader_request(mod_id: int):
                 # Пытаемся фиксануть проблему
                 tool.zipping(game_id=rows[0].id, mod_id=mod_id)
                 # Шлем пользователю
+                tool.downloads_count_update(session=session, mod=rows)
                 return FileResponse(real_path+'.zip', filename=f"{rows[0].name}.zip")
             else:
                 updating = True
@@ -234,21 +224,22 @@ async def download(mod_id: int):
     session = Session()
     # Выполнение запроса
     rows = session.query(sdc.Mod).filter(sdc.Mod.id == mod_id).all()
-    session.close()
 
     if rows is not None and len(rows) > 0:
         if rows[0].condition >= 2:
+            session.close()
             return JSONResponse(status_code=102, content={"message": "this mod is still loading", "error_id": 3})
 
         output = stt.checker(rows=rows, path=path, mod_id=mod_id, session=session)
         if output is not None:
-            if threads.get(f"{str(rows[0])}/{str(mod_id)}", None) != None:
-                del threads[f"{str(rows[0])}/{str(mod_id)}"]
-
+            tool.downloads_count_update(session=session, mod=rows[0])
+            session.close()
             return output
         else:
+            session.close()
             return JSONResponse(status_code=404, content={"message": "the mod is damaged", "error_id": 2, "test": rows})
 
+    session.close()
     return JSONResponse(status_code=404, content={"message": "the mod is not on the server", "error_id": 1})
 
 @app.get("/list/mods/")
@@ -268,7 +259,7 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
     4. DATE_UPDATE - сортировка по дате обновления.
     5. DATE_REQUEST - сортировка по дате последнего запроса.
     6. SOURCE - сортировка по источнику.
-    7. DOWNLOADS (по умолчанию) - сортировка по колическу загрузок.
+    7. DOWNLOADS (по умолчанию) - сортировка по количеству загрузок.
 
     О фильтрации:
     1. "tags" - передать список тегов которые должен содержать мод (по умолчанию пуст) (нужно передать ID тегов).
@@ -277,7 +268,7 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
     3. "dependencies" - отфильтровывает моды у которых есть зависимости на другие моды.
     4. "primary_sources" - список допустимых первоисточников.
     5. "name" - поиск по имени.
-    Работает как проверка есть ли у мода в названии определенная последовательности символов.
+    Работает как проверка есть ли мода в названии определенная последовательности символов.
     """
 
     if page_size > 50 or page_size < 1:
@@ -320,34 +311,67 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
     session.close()
 
     # Вывод результатов
-    return {"database_size": mods_count, "offeset": offset, "results": mods}
+    return {"database_size": mods_count, "offset": offset, "results": mods}
 
-@app.get("/list/games/{page_size}/{page_number}/{source}")
-async def games_list(page_size: int, page_number: int, source: str):
+@app.get("/list/games/")
+async def games_list(page_size: int = 10, page: int = 0, sort: str = "MODS_DOWNLOADS", name: str = "",
+                     type: list[str] = [], genres: list[int] = [], primary_sources: list[str] = []):
     """
     Возвращает список игр, моды к которым есть на сервере.
+
+    1. "page_size" - размер 1 страницы. Диапазон - 1...50 элементов.
+    2. "page" - номер странице. Не должна быть отрицательной.
+
+    О сортировке:
+    Префикс `i` указывает что сортировка должна быть инвертированной.
+    1. NAME - сортировка по имени.
+    2. TYPE - сортировка по типу (игра или приложение).
+    3. CREATION_DATE - сортировка по дате регистрации на сервере.
+    4. MODS_DOWNLOADS - сортировка по суммарному количеству скачанных модов для игры. (по умолчанию)
+    5. MODS_COUNT - сортировка по суммарному количеству модов для игры.
+    6. SOURCE - сортировка по источнику.
+
+    О фильтрации:
+    1. "name" - фильтрация по имени.
+    2. "type" - фильтрация по типу (массив str).
+    3. "genres" - фильтрация по жанрам (массив id).
+    4. "source" - фильтрация по первоисточнику (массив str).
     """
-    # TODO обновить ветку games_list
 
-    cursor = conn.cursor()
+    if page_size > 50 or page_size < 1:
+        return JSONResponse(status_code=413, content={"message": "incorrect page size", "error_id": 1})
+    elif (len(type)+len(genres)+len(primary_sources)) >= 30:
+        return JSONResponse(status_code=413, content={"message": "the maximum complexity of filters is 30 elements in sum", "error_id": 2})
 
-    # Составление запроса
-    req = f'FROM games'
-    if source != "ALL":
-        req += f' WHERE source = "{source}"'
-
-    offeset = page_size * page_number
+    # Создание сессии
+    Session = sessionmaker(bind=sdc.engine)
+    session = Session()
     # Выполнение запроса
-    cursor.execute('SELECT * '+req+f' LIMIT {page_size} OFFSET {offeset}')
-    # Получение результатов запроса
-    results = cursor.fetchall()
+    query = session.query(sdc.Game).order_by(tool.sort_games(sort))
 
-    # Получаем размер базы данных
-    cursor.execute('SELECT COUNT(*) '+req)
-    database_size = cursor.fetchall()
+    # Фильтрация по жанрам
+    if len(genres) > 0:
+        for genre in genres:
+            query = query.filter(sdc.Game.genres.any(sdc.Genres.id == genre))
 
-    cursor.close()
-    return {"database_size": database_size[0][0], "offeset": offeset, "results": results}
+    # Фильтрация по первоисточникам
+    if len(primary_sources) > 0:
+        query = query.filter(sdc.Game.source.in_(primary_sources))
+
+    # Фильтрация по типу
+    if len(primary_sources) > 0:
+        query = query.filter(sdc.Game.type.in_(primary_sources))
+
+    # Фильтрация по имени
+    if len(name) > 0:
+        query = query.filter(sdc.Game.name.ilike(f'%{name}%'))
+
+    mods_count = query.count()
+    offset = page_size*page
+    mods = query.offset(offset).limit(page_size).all()
+
+    session.close()
+    return {"database_size": mods_count, "offset": offset, "results": mods}
 
 
 @app.get("/info/game/{game_id}")
@@ -355,71 +379,55 @@ async def game_info(game_id: int):
     """
     Возвращает информацию об конкретном моде, а так же его состояние на сервере.
     """
-    # TODO обновить ветку game_info
 
-    cursor = conn.cursor()
-
+    # Создание сессии
+    Session = sessionmaker(bind=sdc.engine)
+    session = Session()
     # Выполнение запроса
-    cursor.execute(f'SELECT * FROM games WHERE game_id = {game_id}')
-    # Получение результатов запроса
-    results = cursor.fetchall()
-    if results != None and len(results) > 0:
-        results = results[0]
-    else:
-        results = None
+    query = session.query(sdc.Game)
+    query = query.filter(sdc.Game.id == game_id)
+    query = query.first()
+    session.close()
 
-    cursor.close()
-    return {"results": results}
+    return {"results": query}
 
 
 @app.get("/info/mod/{mod_id}")
-async def mod_info(mod_id: int):
+async def mod_info(mod_id: int, dependencies: bool = False):
     """
     Возвращает информацию о конкретной игре.
+
+    1. mod_id - id мода.
+    2. dependencies - передать ли список ID модов от которых зависит этот мод. (ограничено 20 элементами)
+
+    Я не верю что в зависимостях мода будет более 20 элементов, поэтому такое ограничение.
+    Но если все-таки такой мод будет, то без ограничения мой сервер может лечь от нагрузки.
     """
-    # TODO обновить ветку mod_info
 
-    cursor = conn.cursor()
+    output = {}
 
-    # Составление запроса
-    req = 'SELECT * FROM '
-    est = f' WHERE mod_id = {mod_id}'
-
-    # Выполнение запроса
-    cursor.execute(req+'downloaded_mods'+est)
-    # Получение результатов запроса
-    results_downloaded = cursor.fetchall()
-    if results_downloaded != None and len(results_downloaded) > 0:
-        results_downloaded = results_downloaded[0]
-    else:
-        results_downloaded = None
+    # Создание сессии
+    Session = sessionmaker(bind=sdc.engine)
+    session = Session()
 
     # Выполнение запроса
-    cursor.execute(req+'requested_mods'+est)
-    # Получение результатов запроса
-    results_requested = cursor.fetchall()
-    if results_requested != None and len(results_requested) > 0:
-        results_requested = results_requested[0]
-    else:
-        results_requested = None
+    query = session.query(sdc.Game)
+    query = query.filter(sdc.Game.id == mod_id)
+    output["result"] = query.first()
 
-    # Выполнение запроса
-    cursor.execute(req+'not_loaded_mods'+est)
-    # Получение результатов запроса
-    results_not_loaded = cursor.fetchall()
-    if results_not_loaded == None or len(results_not_loaded) <= 0:
-        results_not_loaded = None
+    if dependencies:
+        query = session.query(sdc.mods_dependencies.c.dependence)
+        query = query.filter(sdc.mods_dependencies.c.mod_id == mod_id)
 
-    cursor.close()
+        count = query.count()
+        result = query.limit(20).all()
+        output["dependencies"] = [row[0] for row in result]
+        output["dependencies_count"] = count
 
-    condition = -1
-    if results_downloaded != None: condition = 0
-    elif results_requested != None:
-        if results_not_loaded != None: condition = 1
-        else: condition = 2
-    elif results_not_loaded != None: condition = 3
+    #Закрытие сессии
+    session.close()
 
-    return {"condition": condition, "downloaded": results_downloaded, "requested": results_requested, "not_loaded": results_not_loaded}
+    return output
 
 
 def init():

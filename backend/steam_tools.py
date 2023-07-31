@@ -207,7 +207,8 @@ def set_game(session, mod_data):
                 description=dat['detailed_description'],
                 mods_downloads=0,
                 creation_date=datetime.now(),
-                source='steam'
+                source='steam',
+                downloads=0
             )
 
             session.execute(insert_statement)

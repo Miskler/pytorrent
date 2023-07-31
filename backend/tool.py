@@ -54,3 +54,39 @@ def sort_mods(sort_by: str):
             return desc(sdc.Mod.downloads)
         case _:
             return sdc.Mod.downloads  # По умолчанию сортируем по загрузкам
+
+def sort_games(sort_by: str):
+    match sort_by:
+        case 'NAME':
+            return sdc.Game.name
+        case 'iNAME':
+            return desc(sdc.Game.name)
+        case 'TYPE':
+            return sdc.Game.type
+        case 'iTYPE':
+            return desc(sdc.Game.type)
+        case 'CREATION_DATE':
+            return sdc.Game.creation_date
+        case 'iCREATION_DATE':
+            return desc(sdc.Game.creation_date)
+        case 'SOURCE':
+            return sdc.Game.source
+        case 'iSOURCE':
+            return desc(sdc.Game.source)
+        case 'MODS_COUNT':
+            return sdc.Game.mods_count
+        case 'iMODS_COUNT':
+            return desc(sdc.Game.mods_count)
+        case 'MODS_DOWNLOADS':
+            return sdc.Game.mods_downloads
+        case _:
+            return desc(sdc.Game.mods_downloads)
+
+
+def downloads_count_update(session, mod):
+    print(mod.downloads)
+    session.query(sdc.Mod).filter_by(id=int(mod.id)).update({'downloads': mod.downloads+1})
+    # TODO дописать эту функцию которая должна обновлять количество загрузок у игр (у модов не работает)
+
+
+    session.commit()
