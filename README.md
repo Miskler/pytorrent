@@ -181,3 +181,64 @@ HTTP code: `200`
 1. Убедитесь что вы установили все зависимости из requirements.txt и у вас не возникли ошибки!
 2. Для корректного запуска сервера на Linux вам нужно выполнить [этот пункт](https://github.com/wmellema/Py-SteamCMD-Wrapper#prerequisites)
 3. Если у вас возникли какие-то проблемы с установкой - пишите мне!
+
+### Установка на Ubuntu:
+#### Одной командой:
+```bash
+sudo adduser steam; sudo apt update; sudo apt upgrade; sudo apt-get install lib32stdc++6 -y; sudo apt install git -y; sudo apt install python3.10 -y; sudo apt -y install python3-pip; sudo apt install htop -y; sudo apt install screen -y; cd /home/steam; git clone https://github.com/Miskler/pytorrent.git; cd pytorrent; chmod -R 777 .; pip3 install -r requirements.txt; sudo snap install --classic certbot; sudo certbot certonly --standalone
+```
+Это займет некоторое время :)
+После перейти к шагу 7!
+
+#### Последовательно:
+1. Создание пользователя: 
+```bash
+sudo adduser steam
+```
+2. Обновление всех пакетов: 
+```bash
+sudo apt update; sudo apt upgrade
+```
+3. Установка по: *(после рекомендую перезапустить ОС)* 
+```bash
+sudo apt-get install lib32stdc++6 -y; sudo apt install git -y; sudo apt install python3.10 -y; sudo apt -y install python3-pip; sudo apt install htop -y; sudo apt install screen -y
+``` 
+4. Установка репозитория: 
+```bash
+cd /home/steam; git clone https://github.com/Miskler/pytorrent.git; cd pytorrent; chmod -R 777 .
+```
+5. Установка зависимостей: 
+```bash
+pip3 install -r requirements.txt
+```
+6. Установка CertBot *(SSL сертификат)*: 
+```bash
+sudo snap install --classic certbot; sudo ln -s /snap/bin/certbot /usr/bin/certbot; sudo certbot certonly --standalone
+```
+7. Создание файла с настройками для сервера:
+Создайте файл в каталоге `backend` со следующим содержимым:
+```py
+bind = "0.0.0.0:443"  # Указывает Gunicorn слушать все IP-адреса на порту 443
+
+#По идее должен содержать значение:
+certfile = "/etc/letsencrypt/live/YOU_DOMEN.com/fullchain.pemm"  # Путь к вашему HTTPS сертификату (фактический путь см в логах certbot)
+#По идее должен содержать значение:
+keyfile = "/etc/letsencrypt/live/YOU_DOMEN.com/privkey.pem"  # Путь к вашему приватному ключу (фактический путь см в логах certbot)
+
+workers = 1  # Количество рабочих процессов Gunicorn
+```
+8. Запуск *(должны находится в каталоге `backend`)*:
+```bash
+screen -S pytorrent_backend ./start.sh
+```
+Жмем сочитание клавиш `CTRL + A + D`
+После проверяем адрес - `https://YOU_DOMEN.com:8000/docs`. Если все ок вы увидете документацию.
+9. Запуск телеграм бота:
+Сначало получаем ключ бота. После создаем файл `key.json` в папке `telegram_bot` и записываем в него:
+```py
+{"key": "YOU KEY"}
+```
+После выполняем команду:
+```bash
+screen -S telegram_bot python3 main.py
+```
