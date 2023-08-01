@@ -221,7 +221,7 @@ sudo snap install --classic certbot; sudo ln -s /snap/bin/certbot /usr/bin/certb
 bind = "0.0.0.0:443"  # Указывает Gunicorn слушать все IP-адреса на порту 443
 
 #По идее должен содержать значение:
-certfile = "/etc/letsencrypt/live/YOU_DOMEN.com/fullchain.pemm"  # Путь к вашему HTTPS сертификату (фактический путь см в логах certbot)
+certfile = "/etc/letsencrypt/live/YOU_DOMEN.com/fullchain.pem"  # Путь к вашему HTTPS сертификату (фактический путь см в логах certbot)
 #По идее должен содержать значение:
 keyfile = "/etc/letsencrypt/live/YOU_DOMEN.com/privkey.pem"  # Путь к вашему приватному ключу (фактический путь см в логах certbot)
 
