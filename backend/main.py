@@ -1,27 +1,23 @@
 import os
 import threading
-import sqlite3
 import shutil
 import steam_tools as stt
 import sql_data_client as sdc
 import tool
 import sql_statistics_client as stc
-from sqlalchemy import delete, insert, select
+from sqlalchemy import delete, insert
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 from fastapi import FastAPI, Request
 from pysteamcmdwrapper import SteamCMD, SteamCMDException
 from starlette.responses import JSONResponse, FileResponse, RedirectResponse
 
-# TODO перед отправкой на сервер протестировать все функции на работоспособность
 # TODO собирать статистику
-# TODO Обновлять mods_count у sdc.Game
 
 WORKSHOP_DIR = os.path.join(os.getcwd())
 path = 'steamapps/workshop/content/'
 
 # Создание подключения к базе данных
-conn = sqlite3.connect('database.db')
 steam = SteamCMD("steam_client")
 app = FastAPI(
     title="PyTorrent API",
@@ -92,7 +88,7 @@ async def mod_dowloader_request(mod_id: int):
             # Проверка, нужно ли обновить мод
             print(db_datetime, mod_update)
             if db_datetime >= mod_update: # дата добавления на сервер позже чем последнее обновление (не надо обновлять)
-                tool.downloads_count_update(session=session, mod=rows)
+                tool.downloads_count_update(session=session, mod=rows[0])
                 return FileResponse(real_path+'.zip', filename=f"{rows[0].name}.zip")
             else:
                 updating = True
@@ -106,7 +102,7 @@ async def mod_dowloader_request(mod_id: int):
                 # Пытаемся фиксануть проблему
                 tool.zipping(game_id=rows[0].id, mod_id=mod_id)
                 # Шлем пользователю
-                tool.downloads_count_update(session=session, mod=rows)
+                tool.downloads_count_update(session=session, mod=rows[0])
                 return FileResponse(real_path+'.zip', filename=f"{rows[0].name}.zip")
             else:
                 updating = True
@@ -165,7 +161,8 @@ def mod_dowload(mod_data:dict, update: bool = False):
         # Выполнение операции INSERT
         session.execute(insert_statement)
     else:
-        session.query(sdc.Mod).filter_by(id=int(mod_data['publishedfileid'])).update({'condition': 2})
+        session.query(sdc.Mod).filter_by(id=int(mod_data['publishedfileid'])).update(
+            {'condition': 2, "date_update": datetime.fromtimestamp(mod_data['time_updated'])})
     session.commit()
 
 
@@ -243,8 +240,8 @@ async def download(mod_id: int):
     return JSONResponse(status_code=404, content={"message": "the mod is not on the server", "error_id": 1})
 
 @app.get("/list/mods/")
-async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", tags: list[int] = [],
-                   games: list[int] = [], dependencies: bool = False, primary_sources: list[str] = [], name: str = ""):
+async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", tags = [],
+                   games = [], dependencies: bool = False, primary_sources = [], name: str = ""):
     """
     Возвращает список модов к конкретной игре, которые есть на сервере.
 
@@ -253,23 +250,28 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
 
     О сортировке:
     Префикс `i` указывает что сортировка должна быть инвертированной.
+    По умолчанию от меньшего к большему, с `i` от большего к меньшему.
     1. NAME - сортировка по имени.
     2. SIZE - сортировка по размеру.
     3. DATE_CREATION - сортировка по дате создания.
     4. DATE_UPDATE - сортировка по дате обновления.
     5. DATE_REQUEST - сортировка по дате последнего запроса.
     6. SOURCE - сортировка по источнику.
-    7. DOWNLOADS (по умолчанию) - сортировка по количеству загрузок.
+    7. DOWNLOADS *(по умолчанию)* - сортировка по количеству загрузок.
 
     О фильтрации:
-    1. "tags" - передать список тегов которые должен содержать мод (по умолчанию пуст) (нужно передать ID тегов).
+    1. "tags" - передать список тегов которые должен содержать мод *(по умолчанию пуст)* *(нужно передать ID тегов)*.
     2. "games" - список игр к которым подходит мод.
     Сервер учитывает что мод может подходить для нескольких игр, но обычно мод подходит только для одной игры.
-    3. "dependencies" - отфильтровывает моды у которых есть зависимости на другие моды.
+    3. "dependencies" - отфильтровывает моды у которых есть зависимости на другие моды. *(булевка)*
     4. "primary_sources" - список допустимых первоисточников.
-    5. "name" - поиск по имени.
-    Работает как проверка есть ли мода в названии определенная последовательности символов.
+    5. "name" - поиск по имени. Например `name=Harmony` *(в отличии от передаваемых списков, тут скобки не нужны)*.
+    Работает как проверка есть ли у мода в названии определенная последовательности символов.
     """
+
+    tags = tool.str_to_list(tags)
+    games = tool.str_to_list(games)
+    primary_sources = tool.str_to_list(primary_sources)
 
     if page_size > 50 or page_size < 1:
         return JSONResponse(status_code=413, content={"message": "incorrect page size", "error_id": 1})
@@ -301,6 +303,7 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
 
     # Фильтрация по имени
     if len(name) > 0:
+        print(len(name))
         query = query.filter(sdc.Mod.name.ilike(f'%{name}%'))
 
     mods_count = query.count()
@@ -315,7 +318,7 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
 
 @app.get("/list/games/")
 async def games_list(page_size: int = 10, page: int = 0, sort: str = "MODS_DOWNLOADS", name: str = "",
-                     type: list[str] = [], genres: list[int] = [], primary_sources: list[str] = []):
+                     type_app = [], genres = [], primary_sources = []):
     """
     Возвращает список игр, моды к которым есть на сервере.
 
@@ -333,14 +336,18 @@ async def games_list(page_size: int = 10, page: int = 0, sort: str = "MODS_DOWNL
 
     О фильтрации:
     1. "name" - фильтрация по имени.
-    2. "type" - фильтрация по типу (массив str).
+    2. "type_app" - фильтрация по типу (массив str).
     3. "genres" - фильтрация по жанрам (массив id).
-    4. "source" - фильтрация по первоисточнику (массив str).
+    4. "primary_sources" - фильтрация по первоисточнику (массив str).
     """
+
+    genres = tool.str_to_list(genres)
+    type_app = tool.str_to_list(type_app)
+    primary_sources = tool.str_to_list(primary_sources)
 
     if page_size > 50 or page_size < 1:
         return JSONResponse(status_code=413, content={"message": "incorrect page size", "error_id": 1})
-    elif (len(type)+len(genres)+len(primary_sources)) >= 30:
+    elif (len(type_app)+len(genres)+len(primary_sources)) >= 30:
         return JSONResponse(status_code=413, content={"message": "the maximum complexity of filters is 30 elements in sum", "error_id": 2})
 
     # Создание сессии
@@ -352,15 +359,18 @@ async def games_list(page_size: int = 10, page: int = 0, sort: str = "MODS_DOWNL
     # Фильтрация по жанрам
     if len(genres) > 0:
         for genre in genres:
-            query = query.filter(sdc.Game.genres.any(sdc.Genres.id == genre))
+            print(type(genre))
+            query = query.filter(sdc.Game.genres.any(id=genre))
+
+            #filtered_games = session.query(Game).filter(Game.genres.any(id=excluded_genre_id))
 
     # Фильтрация по первоисточникам
     if len(primary_sources) > 0:
         query = query.filter(sdc.Game.source.in_(primary_sources))
 
     # Фильтрация по типу
-    if len(primary_sources) > 0:
-        query = query.filter(sdc.Game.type.in_(primary_sources))
+    if len(type_app) > 0:
+        query = query.filter(sdc.Game.type.in_(type_app))
 
     # Фильтрация по имени
     if len(name) > 0:
@@ -411,8 +421,8 @@ async def mod_info(mod_id: int, dependencies: bool = False):
     session = Session()
 
     # Выполнение запроса
-    query = session.query(sdc.Game)
-    query = query.filter(sdc.Game.id == mod_id)
+    query = session.query(sdc.Mod)
+    query = query.filter(sdc.Mod.id == mod_id)
     output["result"] = query.first()
 
     if dependencies:
@@ -433,83 +443,46 @@ async def mod_info(mod_id: int, dependencies: bool = False):
 def init():
     global steam
     try:
-        # TODO не забыть вернуть автообновление
-        steam.install(force=False)
+        steam.install(force=True)
         print("Установка клиента Steam завершена")
     except SteamCMDException:
         print("Steam клиент уже установлен, попробуйте использовать параметр --force для принудительной установки")
 
 if threads.get("start", None) == None:
-    # TODO обновить инициализацию
-
-    # Создание курсора
-    cursor = conn.cursor()
-    # Создание таблицы, если она не существует
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS downloaded_mods (
-            game_id INTEGER,
-            mod_id INTEGER,
-            mod_name TEXT,
-            mod_size INTEGER,
-            data_event DATETIME,
-            source TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS requested_mods (
-            game_id INTEGER,
-            mod_id INTEGER,
-            mod_name TEXT,
-            mod_size INTEGER,
-            data_event DATETIME,
-            source TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS not_loaded_mods (
-            game_id INTEGER,
-            mod_id INTEGER,
-            mod_name TEXT,
-            mod_size INTEGER,
-            data_event DATETIME,
-            source TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS games (
-            game_id INTEGER,
-            game_name TEXT,
-            data_event DATETIME,
-            source TEXT
-        )
-    ''')
-
-    conn.commit()
-
     threads["start"] = threading.Thread(target=init, name="start")
     threads["start"].start()
 
-    # Выполнение запроса для выборки всех элементов из таблицы
-    cursor.execute('SELECT * FROM requested_mods')
-    # Получение всех строк из результата запроса
-    rows = cursor.fetchall()
+    # Создание сессии
+    Session = sessionmaker(bind=sdc.engine)
+    session = Session()
 
-    # Обработка каждой строки в цикле
-    for row in rows:
-        # Ваш код обработки строки
-        # Например, вы можете получить значения столбцов таким образом:
-        path = f'steamapps/workshop/content/{row[0]}/{row[1]}'
+    query = session.query(sdc.Mod)
+    query = query.filter(sdc.Mod.condition != 0).all()
 
-        if os.path.isfile(path+'.zip'):
-            print(f'Обнаружен не провалидированная архив! ({row[0]}/{row[1]})')
-            os.remove(path+'.zip')
-        if os.path.isdir(path):
-            print(f'Обнаружена не провалидированная папка! ({row[0]}/{row[1]})')
-            #Удаление исходной папки и её содержимого
-            shutil.rmtree(path)
+    for mod in query:
+        try:
+            path = f'steamapps/workshop/content/{mod.associated_games[0].id}/{mod.id}'
 
-    # Выполнение операции удаления всех строк в таблице
-    cursor.execute('DELETE FROM requested_mods')
-    cursor.close()
-    # Подтверждение изменений
-    conn.commit()
+            if os.path.isfile(path + '.zip'):
+                print(f'Обнаружен не провалидированный архив! ({mod.id})')
+                os.remove(path + '.zip')
+            if os.path.isdir(path):
+                print(f'Обнаружена не провалидированная папка! ({mod.id})')
+                # Удаление исходной папки и её содержимого
+                shutil.rmtree(path)
+        except:
+            print(f"Ошибка удаления папки/архива битого мода с ID - {mod.id}")
+
+        # Если загрузка окончена ошибкой
+        delete_binding = sdc.games_mods.delete().where(sdc.games_mods.c.mod_id == int(mod.id))
+        delete_statement = delete(sdc.Mod).where(sdc.Mod.id == int(mod.id))
+        delete_tags = sdc.mods_tags.delete().where(sdc.mods_tags.c.mod_id == int(mod.id))
+        delete_dep = sdc.mods_dependencies.delete().where(sdc.mods_dependencies.c.mod_id == int(mod.id))
+        # Выполнение операции DELETE
+        session.execute(delete_statement)
+        session.execute(delete_binding)
+        session.execute(delete_tags)
+        session.execute(delete_dep)
+        session.commit()
+    session.close()
+

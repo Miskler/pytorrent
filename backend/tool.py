@@ -4,6 +4,8 @@ import os
 import shutil
 import sql_data_client as sdc
 from sqlalchemy.sql.expression import desc
+from datetime import datetime
+import json
 
 def zipping(game_id: int, mod_id: int) -> bool:
     # Запаковываем сохраненный мод в архив (для экономии места и трафика)
@@ -84,9 +86,26 @@ def sort_games(sort_by: str):
 
 
 def downloads_count_update(session, mod):
-    print(mod.downloads)
-    session.query(sdc.Mod).filter_by(id=int(mod.id)).update({'downloads': mod.downloads+1})
-    # TODO дописать эту функцию которая должна обновлять количество загрузок у игр (у модов не работает)
+    # Может работать не сильно наглядно из-за кеширования браузера.
+    # Т.е. несколько запросов подряд не увеличит кол-во загрузок!
+    session.query(sdc.Mod).filter_by(id=int(mod.id)).update(
+        {'downloads': mod.downloads+1, 'date_request': datetime.now()})
 
+    # Проходит по всем связанным играм и устанавливает количество скачиваний +1
+    for game in mod.associated_games:
+        game.mods_downloads += 1
 
     session.commit()
+
+def get_mods_count(session, game_id:int):
+    query = session.query(sdc.games_mods)
+    query = query.filter(sdc.games_mods.c.game_id == int(game_id))
+    return query.count()
+
+def str_to_list(string:str):
+    try:
+        string = json.loads(string)
+        if type(string) is not list:
+            string = []
+    except: string = []
+    return string

@@ -4,11 +4,9 @@ import tool
 from fastapi.responses import FileResponse
 import requests
 from bs4 import BeautifulSoup
-from sqlalchemy import delete
 import sql_data_client as sdc
 from sqlalchemy import delete, insert
 from datetime import datetime
-import asyncio
 
 headers = {
     "Content-type": "application/x-www-form-urlencoded",
@@ -194,7 +192,8 @@ def set_tags(session, mod_data):
         session.commit()
 def set_game(session, mod_data):
     rows = session.query(sdc.Game).filter(sdc.Game.id == int(mod_data['consumer_app_id'])).all()
-    if rows == None or len(rows) <= 0:
+
+    if rows is None or len(rows) <= 0:
         # Отправка запроса на сервер
         dat = get_app(mod_data["consumer_app_id"])
         if dat != None:
@@ -206,9 +205,9 @@ def set_game(session, mod_data):
                 short_description=dat['short_description'],
                 description=dat['detailed_description'],
                 mods_downloads=0,
+                mods_count=tool.get_mods_count(session=session, game_id=mod_data["consumer_app_id"]),
                 creation_date=datetime.now(),
                 source='steam',
-                downloads=0
             )
 
             session.execute(insert_statement)
@@ -229,4 +228,6 @@ def set_game(session, mod_data):
                     insert_statement = insert(sdc.game_genres).values(game_id=mod_data["consumer_app_id"],
                                                                       genre_id=genre['id'])
                     session.execute(insert_statement)
-            session.commit()
+    else:
+        session.query(sdc.Game).filter_by(id=int(mod_data['consumer_app_id'])).update({'mods_count': tool.get_mods_count(session=session, game_id=mod_data["consumer_app_id"])})
+    session.commit()

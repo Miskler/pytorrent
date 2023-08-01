@@ -54,7 +54,7 @@ class Game(base): # Таблица "игры"
     source = Column(String)
 
     associated_mods = relationship('Mod', secondary=games_mods, backref='games', viewonly=True)
-    genres = relationship('Genres', secondary=game_genres, backref='games', viewonly=True)
+    genres = relationship('Genres', secondary=game_genres, backref='games')
     allowed_tags_for_mods = relationship('ModTag', secondary=allowed_mods_tags, backref='games', viewonly=True)
 
 class Mod(base): # Таблица "моды"
@@ -80,7 +80,7 @@ class Mod(base): # Таблица "моды"
         secondaryjoin=(mods_dependencies.c.dependence == id), backref='mods',
         foreign_keys=[mods_dependencies.c.mod_id, mods_dependencies.c.dependence]
     )
-    associated_games = relationship('Game', secondary=games_mods, backref='mods', viewonly=True)
+    associated_games = relationship('Game', secondary=games_mods, backref='mods')
 
 class ResourceMod(base): # Ресурсы (скриншоты и лого)
     __tablename__ = 'resources_mods'
