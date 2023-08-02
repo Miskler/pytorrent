@@ -4,6 +4,8 @@ from urllib.parse import urlparse
 from urllib.parse import parse_qs
 import requests
 import time
+import email.utils
+import pymorphy2
 
 with open('key.json', 'r') as file:
     # Загружаем содержимое файла в переменную
@@ -52,13 +54,17 @@ async def echo_message(message):
                     return -1
 
                 if result.headers.get('content-type') == "application/zip":
-                    await bot.send_document(message.chat.id, visible_file_name=f"{mes}.zip", document=result.content,
-                                            reply_to_message_id=message.id)
-                    await bot.reply_to(message, f"Ваш запрос занял {round(time.time()-start_time, 1)} секунд")
+                    await bot.send_document(
+                        message.chat.id,
+                        visible_file_name=get_name(result.headers["content-disposition"]),
+                        document=result.content,
+                        reply_to_message_id=message.id,
+                        timeout=10)
+                    await bot.reply_to(message, f"Ваш запрос занял {format_seconds(round(time.time()-start_time, 1))}")
                 elif result.headers.get('content-type') == "application/json":
                     data = json.loads(result.content)
                     if data["error_id"] == 0 or data["error_id"] == 3:
-                        await bot.reply_to(message, "На сервере нету этого мода, но он сейчас его загрузит!")
+                        await bot.reply_to(message, "На сервере нету этого мода, но он сейчас его загрузит! _(это может занять некоторое время)_", parse_mode="Markdown")
                         if data.get("unsuccessful_attempts", None) == True:
                             await bot.reply_to(message, "Ранее этот мод не удавалось загрузить!", parse_mode="Markdown")
 
@@ -72,10 +78,10 @@ async def echo_message(message):
                                 return -1
                             if res.headers.get('content-type') == "application/json":
                                 data = json.loads(res.content)
-                                if data["condition"] == 3:
+                                if data["result"] == None:
                                     await bot.reply_to(message, "Серверу не удалось загрузить этот мод 😢")
                                     return -1
-                                elif data["condition"] == 0:
+                                elif data["result"]["condition"] <= 1:
                                     try:
                                         result = requests.get(
                                             url=f"https://43093.zetalink.ru:8000/download/{str(mes)}", timeout=10)
@@ -84,10 +90,13 @@ async def echo_message(message):
                                         return -1
 
                                     if result.headers.get('content-type') == "application/zip":
-                                        await bot.send_document(message.chat.id, visible_file_name=f"{mes}.zip",
-                                                                document=result.content,
-                                                                reply_to_message_id=message.id)
-                                        await bot.reply_to(message, f"Ваш запрос занял {round(time.time()-start_time, 1)} секунд")
+                                        await bot.send_document(
+                                            message.chat.id,
+                                            visible_file_name=get_name(result.headers["content-disposition"]),
+                                            document=result.content,
+                                            reply_to_message_id=message.id,
+                                            timeout=10)
+                                        await bot.reply_to(message, f"Ваш запрос занял {format_seconds(round(time.time()-start_time, 1))}")
                                     else:
                                         await bot.reply_to(message, "Сервер прислал неожиданный ответ 😧 _(point=4)_",
                                                            parse_mode="Markdown")
@@ -118,6 +127,21 @@ async def echo_message(message):
     except:
         await bot.reply_to(message, "Ты вызвал странную ошибку...\nПопробуй загрузить мод еще раз!", parse_mode="Markdown")
 
+def format_seconds(seconds):
+    try:
+        morph = pymorphy2.MorphAnalyzer()
+        word = 'секунда'
+        parsed_word = morph.parse(word)[0]
+        res = f"{seconds} {parsed_word.make_agree_with_number(seconds).word}"
+    except:
+        res = "ERROR"
+    return res
+
+def get_name(head:str):
+    if head.startswith("attachment; filename="):
+        return head.split("attachment; filename=")[-1]
+    else:
+        return email.utils.unquote(head.split("filename*=utf-8''")[-1])
 
 import asyncio
 asyncio.run(bot.polling())

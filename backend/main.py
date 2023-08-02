@@ -4,13 +4,16 @@ import shutil
 import steam_tools as stt
 import sql_data_client as sdc
 import tool
+import time
 import sql_statistics_client as stc
 from sqlalchemy import delete, insert
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.sql.expression import desc
 from datetime import datetime
 from fastapi import FastAPI, Request
 from pysteamcmdwrapper import SteamCMD, SteamCMDException
 from starlette.responses import JSONResponse, FileResponse, RedirectResponse
+import statistics
 
 # TODO собирать статистику
 
@@ -55,6 +58,8 @@ async def mod_dowloader_request(mod_id: int):
     Если у сервера нет этого мода он отправит `JSON` с информацией о постановке мода на скачивание.
     """
 
+    wait_time = datetime.now()
+
     global threads
     global path
 
@@ -71,10 +76,14 @@ async def mod_dowloader_request(mod_id: int):
         output = stt.checker(rows=rows, path=path, mod_id=mod_id, session=session)
         if output is not None:
             tool.downloads_count_update(session=session, mod=rows)
+
+            stc.create_processing(type="download_steam_ok", time_start=wait_time)
             return output
 
+        stc.create_processing(type="download_steam_error", time_start=wait_time)
         return JSONResponse(status_code=404, content={"message": "this mod was not found", "error_id": 2})
     elif threads.get(f"{str(mod['consumer_app_id'])}/{str(mod_id)}", None) == True: # Проверяем, загружаем ли этот ресурс прямо сейчас
+        stc.create_processing(type="download_steam_error", time_start=wait_time)
         return JSONResponse(status_code=102, content={"message": "your request is already being processed", "error_id": 3})
 
     real_path = path + f'{str(mod["consumer_app_id"])}/{str(mod_id)}'
@@ -89,6 +98,7 @@ async def mod_dowloader_request(mod_id: int):
             print(db_datetime, mod_update)
             if db_datetime >= mod_update: # дата добавления на сервер позже чем последнее обновление (не надо обновлять)
                 tool.downloads_count_update(session=session, mod=rows[0])
+                stc.create_processing(type="download_steam_ok", time_start=wait_time)
                 return FileResponse(real_path+'.zip', filename=f"{rows[0].name}.zip")
             else:
                 updating = True
@@ -103,6 +113,7 @@ async def mod_dowloader_request(mod_id: int):
                 tool.zipping(game_id=rows[0].id, mod_id=mod_id)
                 # Шлем пользователю
                 tool.downloads_count_update(session=session, mod=rows[0])
+                stc.create_processing(type="download_steam_ok", time_start=wait_time)
                 return FileResponse(real_path+'.zip', filename=f"{rows[0].name}.zip")
             else:
                 updating = True
@@ -132,15 +143,16 @@ async def mod_dowloader_request(mod_id: int):
             session.close()
 
     if threads["start"].is_alive(): #Проверяем, готов ли сервер обрабатывать запросы
+        stc.create_processing(type="download_steam_error", time_start=wait_time)
         return JSONResponse(status_code=103, content={"message": "the server is not ready to process requests", "error_id": 1})
 
     #Ставим задачу загрузить мод
     threads[f"{mod['consumer_app_id']}/{str(mod_id)}"] = True
 
-    threading.Thread(target=mod_dowload, args=(mod, updating), name=f"{str(mod['consumer_app_id'])}/{str(mod_id)}").start()
+    threading.Thread(target=mod_dowload, args=(mod, wait_time, updating,), name=f"{str(mod['consumer_app_id'])}/{str(mod_id)}").start()
     #Оповещаем пользователя, что его запрос принят в обработку
     return JSONResponse(status_code=202, content={"message": "request added to queue", "error_id": 0, "updating": updating})
-def mod_dowload(mod_data:dict, update: bool = False):
+def mod_dowload(mod_data:dict, wait_time, update: bool = False):
     # Создание сессии
     Session = sessionmaker(bind=sdc.engine)
     # Выполнение запроса
@@ -187,6 +199,7 @@ def mod_dowload(mod_data:dict, update: bool = False):
                          name=f"{mod_data['consumer_app_id']}/{mod_data['publishedfileid']}/get_info").start()
 
         print(f"Процесс загрузки ({mod_data['consumer_app_id']}/{mod_data['publishedfileid']}) завершен! (успешно)")
+        stc.create_processing(type="steam_ok", time_start=wait_time)
     else:
         # Если загрузка окончена ошибкой
         delete_binding = sdc.games_mods.delete().where(sdc.games_mods.c.mod_id == int(mod_data['publishedfileid']))
@@ -201,6 +214,7 @@ def mod_dowload(mod_data:dict, update: bool = False):
         session.commit()
         session.close()
         print(f"Процесс загрузки ({mod_data['consumer_app_id']}/{mod_data['publishedfileid']}) завершен! (неудачно)")
+        stc.create_processing(type="steam_error", time_start=wait_time)
 
     global threads
     del threads[f"{mod_data['consumer_app_id']}/{mod_data['publishedfileid']}"]
@@ -213,6 +227,8 @@ async def download(mod_id: int):
     Эта самая быстрая команда загрузки, но если на сервере не будет запрашиваемого мода никаких действий по его загрузке предпринято не будет.
     """
 
+    wait_time = datetime.now()
+
     global path
     global threads
 
@@ -224,18 +240,22 @@ async def download(mod_id: int):
 
     if rows is not None and len(rows) > 0:
         if rows[0].condition >= 2:
+            stc.create_processing(type="download_local_error", time_start=wait_time)
             session.close()
             return JSONResponse(status_code=102, content={"message": "this mod is still loading", "error_id": 3})
 
         output = stt.checker(rows=rows, path=path, mod_id=mod_id, session=session)
         if output is not None:
             tool.downloads_count_update(session=session, mod=rows[0])
+            stc.create_processing(type="download_local_ok", time_start=wait_time)
             session.close()
             return output
         else:
+            stc.create_processing(type="download_local_error", time_start=wait_time)
             session.close()
             return JSONResponse(status_code=404, content={"message": "the mod is damaged", "error_id": 2, "test": rows})
 
+    stc.create_processing(type="download_local_error", time_start=wait_time)
     session.close()
     return JSONResponse(status_code=404, content={"message": "the mod is not on the server", "error_id": 1})
 
@@ -275,7 +295,7 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
 
     if page_size > 50 or page_size < 1:
         return JSONResponse(status_code=413, content={"message": "incorrect page size", "error_id": 1})
-    elif (len(tags)+len(games)+len(primary_sources)) >= 30:
+    elif (len(tags)+len(games)+len(primary_sources)) > 30:
         return JSONResponse(status_code=413, content={"message": "the maximum complexity of filters is 30 elements in sum", "error_id": 2})
 
     # Создание сессии
@@ -327,18 +347,18 @@ async def games_list(page_size: int = 10, page: int = 0, sort: str = "MODS_DOWNL
 
     О сортировке:
     Префикс `i` указывает что сортировка должна быть инвертированной.
-    1. NAME - сортировка по имени.
-    2. TYPE - сортировка по типу (игра или приложение).
-    3. CREATION_DATE - сортировка по дате регистрации на сервере.
-    4. MODS_DOWNLOADS - сортировка по суммарному количеству скачанных модов для игры. (по умолчанию)
-    5. MODS_COUNT - сортировка по суммарному количеству модов для игры.
-    6. SOURCE - сортировка по источнику.
+    1. `NAME` - сортировка по имени.
+    2. `TYPE` - сортировка по типу *(`game` или `app`)*.
+    3. `CREATION_DATE` - сортировка по дате регистрации на сервере.
+    4. `MODS_DOWNLOADS` - сортировка по суммарному количеству скачанных модов для игры *(по умолчанию)*.
+    5. `MODS_COUNT` - сортировка по суммарному количеству модов для игры.
+    6. `SOURCE` - сортировка по источнику.
 
     О фильтрации:
-    1. "name" - фильтрация по имени.
-    2. "type_app" - фильтрация по типу (массив str).
-    3. "genres" - фильтрация по жанрам (массив id).
-    4. "primary_sources" - фильтрация по первоисточнику (массив str).
+    1. `name` - фильтрация по имени.
+    2. `type_app` - фильтрация по типу *(массив str)*.
+    3. `genres` - фильтрация по жанрам (массив id)*.
+    4. `primary_sources` - фильтрация по первоисточнику *(массив str)*.
     """
 
     genres = tool.str_to_list(genres)
@@ -347,7 +367,7 @@ async def games_list(page_size: int = 10, page: int = 0, sort: str = "MODS_DOWNL
 
     if page_size > 50 or page_size < 1:
         return JSONResponse(status_code=413, content={"message": "incorrect page size", "error_id": 1})
-    elif (len(type_app)+len(genres)+len(primary_sources)) >= 30:
+    elif (len(type_app)+len(genres)+len(primary_sources)) > 30:
         return JSONResponse(status_code=413, content={"message": "the maximum complexity of filters is 30 elements in sum", "error_id": 2})
 
     # Создание сессии
@@ -399,7 +419,7 @@ async def game_info(game_id: int):
     query = query.first()
     session.close()
 
-    return {"results": query}
+    return {"result": query}
 
 
 @app.get("/info/mod/{mod_id}")
@@ -436,6 +456,77 @@ async def mod_info(mod_id: int, dependencies: bool = False):
 
     #Закрытие сессии
     session.close()
+
+    return output
+
+@app.get("/condition/mod/{ids_array}")
+async def condition_mods(ids_array):
+    """
+    Возвращает список с состояниями существующих модов на сервере.
+    Принимает массив ID модов. Возвращает словарь с модами которые есть на сервере и их состоянием *(`0`, `1`, `2`)*.
+    Ограничение на разовый запрос - 50 элементов.
+    """
+
+    ids_array = tool.str_to_list(ids_array)
+
+    if len(ids_array) < 1 or len(ids_array) > 50:
+        return JSONResponse(status_code=413, content={"message": "the size of the array is not correct", "error_id": 1})
+
+    output = {}
+
+    # Создание сессии
+    Session = sessionmaker(bind=sdc.engine)
+    session = Session()
+
+    # Выполнение запроса
+    query = session.query(sdc.Mod)
+    query = query.filter(sdc.Mod.id.in_(ids_array))
+    for i in query:
+        output[i.id] = i.condition
+
+    return output
+
+
+@app.get("/statistics/delay")
+async def statistics_delay():
+    """
+    Все данные возвращаются в миллисекундах *(int)*.
+    Возвращает информацию о среднестатистической задержке при:
+    1. `fast` - задержка обработки запроса о получении мода который есть на сервере.
+    Важно понимать что сюда попадает только время затраченное на непосредственно обработку запроса сервером.
+    2. `full` - полное время затраченное от начала обработки, до загрузки до состояния `1`
+    *(т.е. не зарегистрирован, но доступен ядл скачивания)*.
+    """
+
+    # Создание сессии
+    Session = sessionmaker(bind=stc.engine)
+    session = Session()
+
+    output = {}
+
+    # Выполнение запроса FAST
+    query = session.query(stc.ProcessingTime.delay).order_by(desc(stc.ProcessingTime.time))
+    query = query.filter(stc.ProcessingTime.type.in_(["download_local_ok", "download_steam_ok"]))
+    query = query.limit(20).all()
+    if query != None and len(query) > 0:
+        statist = []
+        for i in query:
+            statist.append(i.delay)
+        output["fast"] = int(statistics.mean(statist))
+    else:
+        output["fast"] = 0
+
+    # Выполнение запроса FULL
+    query = session.query(stc.ProcessingTime.delay).order_by(desc(stc.ProcessingTime.time))
+    query = query.filter(stc.ProcessingTime.type.in_(["steam_ok"]))
+    query = query.limit(20).all()
+    if query != None and len(query) > 0:
+        statist = []
+        for i in query:
+            statist.append(i.delay)
+        output["full"] = int(statistics.mean(statist))
+    else:
+        output["full"] = 0
 
     return output
 

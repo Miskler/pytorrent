@@ -1,6 +1,8 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Date
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Date, insert
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
+import time
+from datetime import datetime
 
 
 engine = create_engine('sqlite:///sql/statistics.db')
@@ -8,7 +10,7 @@ base = declarative_base()
 
 
 # Определяем модель
-class statistics_hour(base):
+class StatisticsHour(base):
     __tablename__ = 'statistics_hour'
     date_time = Column(DateTime, primary_key=True)
 
@@ -26,7 +28,7 @@ class statistics_hour(base):
 
     files_sent = Column(Integer)
 
-class statistics_day(base):
+class StatisticsDay(base):
     __tablename__ = 'statistics_day'
     date = Column(Date, primary_key=True)
 
@@ -44,11 +46,26 @@ class statistics_day(base):
 
     files_sent = Column(Integer)
 
-class processing_time(base):
+class ProcessingTime(base):
     __tablename__ = 'processing_time'
     time = Column(DateTime, primary_key=True)
     type = Column(String)
     delay = Column(Integer)
+
+def create_processing(type, time_start):
+    milliseconds = int((datetime.now()-time_start).total_seconds() * 1000)
+
+    req = insert(ProcessingTime).values(
+        time=time_start,
+        type=type,
+        delay=milliseconds
+    )
+
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    session.execute(req)
+    session.commit()
+    session.close()
 
 
 # Создаем таблицу в базе данных
