@@ -6,6 +6,7 @@ import requests
 import time
 import email.utils
 import pymorphy2
+import telebot
 
 with open('key.json', 'r') as file:
     # Загружаем содержимое файла в переменную
@@ -14,7 +15,7 @@ with open('key.json', 'r') as file:
 bot = AsyncTeleBot(API_TOKEN)
 
 # Handle '/start' and '/help'
-@bot.message_handler(commands=['help', 'start'])
+@bot.message_handler(commands=['help', 'start', "старт", "помощь"])
 async def send_welcome(message):
     await bot.reply_to(message, """\
 Этот бот позволяет скачивать моды со *Steam* через чат *Telegram!* 💨\n
@@ -24,6 +25,15 @@ async def send_welcome(message):
     await bot.reply_to(message, """\
 Чтобы получить `ZIP` архив отправьте ссылку на мод или `ID` мода в *Steam* и бот в ответ даст `ZIP` архив 🤝
     """, parse_mode="Markdown")
+
+
+@bot.message_handler(commands=['project', 'проект'])
+async def send_welcome(message):
+    markup = telebot.types.InlineKeyboardMarkup()
+    markup.add(telebot.types.InlineKeyboardButton(text='Репозиторий проекта', url='https://github.com/Miskler/pytorrent'))
+    markup.add(telebot.types.InlineKeyboardButton(text='Telegram канал автора', url='https://t.me/sphere_games'))
+    markup.add(telebot.types.InlineKeyboardButton(text='API бота', url='https://43093.zetalink.ru:8000/docs'))
+    await bot.send_message(message.chat.id, 'Это бесплатный **open-source** проект с **открытым API**! 😍', parse_mode="Markdown", reply_markup=markup)
 
 
 # Handle all other messages with content_type 'text' (content_types defaults to ['text'])
