@@ -404,6 +404,96 @@ async def games_list(page_size: int = 10, page: int = 0, sort: str = "MODS_DOWNL
     return {"database_size": mods_count, "offset": offset, "results": mods}
 
 
+@app.get("/list/tags/{game_id}")
+async def list_tags(game_id: int, page_size: int = 10, page: int = 0):
+    """
+    Возвращает список тегов закрепленных за игрой и её модами. Нужно передать ID интересующей игры.
+
+    1. `page_size` - размер 1 страницы. Диапазон - 1...50 элементов.
+    2. `page` - номер странице. Не должна быть отрицательной.
+    """
+
+    if page_size > 50 or page_size < 1:
+        return JSONResponse(status_code=413, content={"message": "incorrect page size", "error_id": 1})
+
+    # Создание сессии
+    Session = sessionmaker(bind=sdc.engine)
+    session = Session()
+    # Выполнение запроса
+    query = session.query(sdc.ModTag)
+    query = query.filter(sdc.ModTag.associated_games.any(sdc.Game.id == game_id))
+
+    tags_count = query.count()
+    offset = page_size*page
+    tags = query.offset(offset).limit(page_size).all()
+
+    session.close()
+    return {"database_size": tags_count, "offset": offset, "results": tags}
+
+
+@app.get("/list/genres")
+async def list_genres(page_size: int = 10, page: int = 0):
+    """
+    Возвращает список жанров для игр.
+
+    1. `page_size` - размер 1 страницы. Диапазон - 1...50 элементов.
+    2. `page` - номер странице. Не должна быть отрицательной.
+    """
+
+    if page_size > 50 or page_size < 1:
+        return JSONResponse(status_code=413, content={"message": "incorrect page size", "error_id": 1})
+
+    # Создание сессии
+    Session = sessionmaker(bind=sdc.engine)
+    session = Session()
+    # Выполнение запроса
+    query = session.query(sdc.Genres)
+
+    genres_count = query.count()
+    offset = page_size*page
+    genres = query.offset(offset).limit(page_size).all()
+
+    session.close()
+    return {"database_size": genres_count, "offset": offset, "results": genres}
+
+
+@app.get("/list/resources_mods/{mod_id}")
+async def list_resources_mods(mod_id: int, page_size: int = 10, page: int = 0, types_resources = []):
+    """
+    Возвращает список ресурсов у конкретного мода.
+
+    1. `page_size` *(int)* - размер 1 страницы. Диапазон - 1...50 элементов.
+    2. `page` *(int)* - номер странице. Не должна быть отрицательной.
+    3. `types_resources` *(list[str])* - фильтрация по типам ресурсов. *(`logo` / `screenshot`)*, ограничение - 20 элементов.
+    """
+
+    if page_size > 50 or page_size < 1:
+        return JSONResponse(status_code=413, content={"message": "incorrect page size", "error_id": 1})
+
+    types_resources = tool.str_to_list(types_resources)
+
+    if len(types_resources) > 20:
+        return JSONResponse(status_code=413, content={"message": "the maximum complexity of filters is 30 elements in sum", "error_id": 2})
+
+    # Создание сессии
+    Session = sessionmaker(bind=sdc.engine)
+    session = Session()
+    # Выполнение запроса
+    query = session.query(sdc.ResourceMod)
+    query = query.filter(sdc.ResourceMod.owner_id == mod_id)
+
+    # Фильтрация по типу
+    if len(types_resources) > 0:
+        query = query.filter(sdc.ResourceMod.type.in_(types_resources))
+
+    resources_count = query.count()
+    offset = page_size*page
+    resources = query.offset(offset).limit(page_size).all()
+
+    session.close()
+    return {"database_size": resources_count, "offset": offset, "results": resources}
+
+
 @app.get("/info/game/{game_id}")
 async def game_info(game_id: int):
     """
@@ -538,7 +628,6 @@ def init():
         print("Установка клиента Steam завершена")
     except SteamCMDException:
         print("Steam клиент уже установлен, попробуйте использовать параметр --force для принудительной установки")
-
 if threads.get("start", None) == None:
     threads["start"] = threading.Thread(target=init, name="start")
     threads["start"].start()

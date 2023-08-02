@@ -103,5 +103,7 @@ class ModTag(base): # Теги для модов
     id = Column(Integer, primary_key=True)
     name = Column(String)
 
+    associated_games = relationship('Game', secondary=allowed_mods_tags, backref='tags', viewonly=True)
+
 
 base.metadata.create_all(engine)
