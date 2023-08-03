@@ -47,6 +47,7 @@ async def main():
     """
     Переадресация на `/docs`
     """
+    stc.update("/")
     return RedirectResponse(url="/docs")
 
 
@@ -57,6 +58,7 @@ async def mod_dowloader_request(mod_id: int):
     Если у сервера уже есть этот мод - он его отправит как `ZIP` архив со сжатием `ZIP_BZIP2`.
     Если у сервера нет этого мода он отправит `JSON` с информацией о постановке мода на скачивание.
     """
+    stc.update('/download/steam/')
 
     wait_time = datetime.now()
 
@@ -226,6 +228,7 @@ async def download(mod_id: int):
     Если у сервера уже есть этот мод - он его отправит как `ZIP` архив со сжатием `ZIP_BZIP2`.
     Эта самая быстрая команда загрузки, но если на сервере не будет запрашиваемого мода никаких действий по его загрузке предпринято не будет.
     """
+    stc.update("/download/")
 
     wait_time = datetime.now()
 
@@ -288,6 +291,7 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
     5. "name" - поиск по имени. Например `name=Harmony` *(в отличии от передаваемых списков, тут скобки не нужны)*.
     Работает как проверка есть ли у мода в названии определенная последовательности символов.
     """
+    stc.update("/list/mods/")
 
     tags = tool.str_to_list(tags)
     games = tool.str_to_list(games)
@@ -360,6 +364,7 @@ async def games_list(page_size: int = 10, page: int = 0, sort: str = "MODS_DOWNL
     3. `genres` - фильтрация по жанрам (массив id)*.
     4. `primary_sources` - фильтрация по первоисточнику *(массив str)*.
     """
+    stc.update("/list/games/")
 
     genres = tool.str_to_list(genres)
     type_app = tool.str_to_list(type_app)
@@ -412,6 +417,7 @@ async def list_tags(game_id: int, page_size: int = 10, page: int = 0):
     1. `page_size` - размер 1 страницы. Диапазон - 1...50 элементов.
     2. `page` - номер странице. Не должна быть отрицательной.
     """
+    stc.update("/list/tags/")
 
     if page_size > 50 or page_size < 1:
         return JSONResponse(status_code=413, content={"message": "incorrect page size", "error_id": 1})
@@ -439,6 +445,7 @@ async def list_genres(page_size: int = 10, page: int = 0):
     1. `page_size` - размер 1 страницы. Диапазон - 1...50 элементов.
     2. `page` - номер странице. Не должна быть отрицательной.
     """
+    stc.update("/list/genres/")
 
     if page_size > 50 or page_size < 1:
         return JSONResponse(status_code=413, content={"message": "incorrect page size", "error_id": 1})
@@ -466,6 +473,7 @@ async def list_resources_mods(mod_id: int, page_size: int = 10, page: int = 0, t
     2. `page` *(int)* - номер странице. Не должна быть отрицательной.
     3. `types_resources` *(list[str])* - фильтрация по типам ресурсов. *(`logo` / `screenshot`)*, ограничение - 20 элементов.
     """
+    stc.update("/list/resources_mods/")
 
     if page_size > 50 or page_size < 1:
         return JSONResponse(status_code=413, content={"message": "incorrect page size", "error_id": 1})
@@ -499,6 +507,7 @@ async def game_info(game_id: int):
     """
     Возвращает информацию об конкретном моде, а так же его состояние на сервере.
     """
+    stc.update("/info/game/")
 
     # Создание сессии
     Session = sessionmaker(bind=sdc.engine)
@@ -523,6 +532,7 @@ async def mod_info(mod_id: int, dependencies: bool = False):
     Я не верю что в зависимостях мода будет более 20 элементов, поэтому такое ограничение.
     Но если все-таки такой мод будет, то без ограничения мой сервер может лечь от нагрузки.
     """
+    stc.update("/info/mod/")
 
     output = {}
 
@@ -556,6 +566,7 @@ async def condition_mods(ids_array):
     Принимает массив ID модов. Возвращает словарь с модами которые есть на сервере и их состоянием *(`0`, `1`, `2`)*.
     Ограничение на разовый запрос - 50 элементов.
     """
+    stc.update("/condition/mod/")
 
     ids_array = tool.str_to_list(ids_array)
 
@@ -587,6 +598,7 @@ async def statistics_delay():
     2. `full` - полное время затраченное от начала обработки, до загрузки до состояния `1`
     *(т.е. не зарегистрирован, но доступен ядл скачивания)*.
     """
+    stc.update("/statistics/delay/")
 
     # Создание сессии
     Session = sessionmaker(bind=stc.engine)

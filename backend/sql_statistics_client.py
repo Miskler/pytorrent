@@ -1,8 +1,7 @@
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Date, insert
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-import time
-from datetime import datetime
+from datetime import datetime, date
 
 
 engine = create_engine('sqlite:///sql/statistics.db')
@@ -12,39 +11,23 @@ base = declarative_base()
 # Определяем модель
 class StatisticsHour(base):
     __tablename__ = 'statistics_hour'
-    date_time = Column(DateTime, primary_key=True)
+    id = Column(Integer, primary_key=True)
+    date_time = Column(DateTime)
 
-    download_steam = Column(Integer)
-    download = Column(Integer)
+    # download_steam, download, info_mod, etc
+    type = Column(String)
+    count = Column(Integer)
 
-    info_mod = Column(Integer)
-    info_game = Column(Integer)
-
-    list_mods = Column(Integer)
-    list_games = Column(Integer)
-
-    successful_downloads_on_server = Column(Integer)
-    failed_downloads_on_server = Column(Integer)
-
-    files_sent = Column(Integer)
 
 class StatisticsDay(base):
     __tablename__ = 'statistics_day'
-    date = Column(Date, primary_key=True)
+    id = Column(Integer, primary_key=True)
+    date = Column(Date)
 
-    download_steam = Column(Integer)
-    download = Column(Integer)
+    #download_steam, download, info_mod, etc
+    type = Column(String)
+    count = Column(Integer)
 
-    info_mod = Column(Integer)
-    info_game = Column(Integer)
-
-    list_mods = Column(Integer)
-    list_games = Column(Integer)
-
-    successful_downloads_on_server = Column(Integer)
-    failed_downloads_on_server = Column(Integer)
-
-    files_sent = Column(Integer)
 
 class ProcessingTime(base):
     __tablename__ = 'processing_time'
@@ -66,6 +49,50 @@ def create_processing(type, time_start):
     session.execute(req)
     session.commit()
     session.close()
+
+
+def update(type:str):
+    Session = sessionmaker(bind=engine)
+    session = Session()
+
+    update_hour(session=session, type=type)
+    update_day(session=session, type=type)
+
+    session.commit()
+    session.close()
+
+def update_hour(session, type:str):
+    # Получение текущего часа
+    current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
+
+    # Запрос к базе данных для получения колонки
+    query = session.query(StatisticsHour).filter_by(date_time=current_hour, type=str(type))
+    column = query.first()
+
+    if column:
+        query.update({'count': column.count+1})
+    else:
+        session.execute(insert(StatisticsHour).values(
+            date_time=current_hour,
+            type=type,
+            count=1
+        ))
+def update_day(session, type:str):
+    # Получение текущего часа
+    current_day = date.today()
+
+    # Запрос к базе данных для получения колонки
+    query = session.query(StatisticsDay).filter_by(date=current_day, type=str(type))
+    column = query.first()
+
+    if column:
+        query.update({'count': column.count+1})
+    else:
+        session.execute(insert(StatisticsDay).values(
+            date=current_day,
+            type=type,
+            count=1
+        ))
 
 
 # Создаем таблицу в базе данных
