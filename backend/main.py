@@ -1,21 +1,19 @@
 import os
-import threading
+import tool
 import shutil
+import threading
+import statistics
 import steam_tools as stt
 import sql_data_client as sdc
-import tool
-import time
 import sql_statistics_client as stc
+from fastapi import FastAPI, Request
 from sqlalchemy import delete, insert, func
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql.expression import desc
-from datetime import datetime
-from fastapi import FastAPI, Request
+from datetime import datetime, date, timedelta
 from pysteamcmdwrapper import SteamCMD, SteamCMDException
 from starlette.responses import JSONResponse, FileResponse, RedirectResponse
-import statistics
 
-# TODO собирать статистику
 
 WORKSHOP_DIR = os.path.join(os.getcwd())
 path = 'steamapps/workshop/content/'
@@ -41,6 +39,7 @@ async def modify_header(request: Request, call_next):
     response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Access-Control-Expose-Headers"] = "Content-Type,Content-Disposition"
     return response
+
 
 @app.get("/")
 async def main():
@@ -647,16 +646,14 @@ async def statistics_delay():
     return output
 
 @app.get("/statistics/hour")
-async def statistics_hour(day:int = -1, month:int = -1, year:int = -1, start_hour:int = 0, end_hour:int = 23):
+async def statistics_hour(select_date: date = None, start_hour:int = 0, end_hour:int = 23):
     """
     Возвращает подробную статистику о запросах и работе сервера в конкретный день.
 
     Принимает необязательные параметры:
-    1. `day` *(`int`)* - день месяца *(по умолчанию текущий)*.
-    2. `month` *(`int`)* - месяц в году *(по умолчанию текущий)*.
-    3. `year` *(`int`)* - год *(по умолчанию текущий)*.
-    4. `start_hour` *(`int`)* - фильтрация по минимальному значению часа *(диапазон 0...23)*.
-    5. `end_hour` *(`int`)* - фильтрация по максимальному значению часа *(диапазон 0...23)*.
+    1. `day` *(`YYYY-MM-DD`; `str`)* - день по которому нужна статистика. По умолчанию - сегодня.
+    2. `start_hour` *(`int`)* - фильтрация по минимальному значению часа *(диапазон 0...23)*.
+    3. `end_hour` *(`int`)* - фильтрация по максимальному значению часа *(диапазон 0...23)*.
 
     При фильтрации по часу отсекаются крайние значения, но не указанное.
     Т.е. - если указать в `start_hour` и в `end_hour` одно и тоже значение,
@@ -673,41 +670,65 @@ async def statistics_hour(day:int = -1, month:int = -1, year:int = -1, start_hou
     start_date = datetime.now().replace(hour=start_hour, minute=0, second=0, microsecond=0)
     end_date = datetime.now().replace(hour=end_hour, minute=0, second=0, microsecond=0)
 
-    if 0 < day <= 31:
-        start_date = start_date.replace(day=day)
-        end_date = end_date.replace(day=day)
-
-    if 0 < month <= 12:
-        start_date = start_date.replace(month=month)
-        end_date = end_date.replace(month=month)
-
-    if 0 < year:
-        start_date = start_date.replace(year=year)
-        start_date = start_date.replace(year=year)
+    if select_date is date:
+        start_date = start_date.replace(day=select_date.day, month=select_date.month, year=select_date.year)
+        end_date = end_date.replace(day=select_date.day, month=select_date.month, year=select_date.year)
 
     Session = sessionmaker(bind=stc.engine)
     session = Session()
 
-    query = session.query(stc.StatisticsHour)
+    query = session.query(stc.StatisticsHour.date_time, stc.StatisticsHour.count, stc.StatisticsHour.type)
     query = query.filter(stc.StatisticsHour.date_time >= start_date, stc.StatisticsHour.date_time <= end_date)
 
-    return query.all()
+    output = []
+    for i in query.all():
+        output.append({"date_time": i.date_time, "type": i.type, "count": i.count})
+
+    session.close()
+    return output
 
 @app.get("/statistics/day")
-async def statistics_day():
+async def statistics_day(start_date: date = None, end_date: date = None):
     """
-    Функция не готова :(
+    Возвращает подробную статистику о запросах и работе сервера в конкретный день.
+
+    Принимает необязательные параметры:
+    1. `start_date` *(`YYYY-MM-DD`; `str`)* - день от начала которого нужна статистика *(включительно)*.
+    По умолчанию = `end_date`-`7 days`.
+    2. `end_date` *(`YYYY-MM-DD`; `str`)* - день до которого нужна статистика *(включительно)*.
+    По умолчанию - текущая дата.
+
+    При фильтрации по дня отсекаются крайние значения, но не указанные.
+    Т.е. - если указать в `start_date` и в `end_date` одно и тоже значение,
+    то на выходе получите статистику только по этому дню.
     """
     stc.update("/statistics/day/")
+    if end_date is None:
+        end_date = date.today()
+    if start_date is None:
+        start_date = end_date-timedelta(days=7)
+    if start_date > end_date:
+        return JSONResponse(status_code=409, content={"message": "conflicting request", "error_id": 3})
 
-    return
+    Session = sessionmaker(bind=stc.engine)
+    session = Session()
 
-@app.get("/statistics/info")
+    query = session.query(stc.StatisticsDay.date, stc.StatisticsDay.count, stc.StatisticsDay.type)
+    query = query.filter(stc.StatisticsDay.date >= start_date, stc.StatisticsDay.date <= end_date)
+
+    output = []
+    for i in query.all():
+        output.append({"date": i.date, "type": i.type, "count": i.count})
+
+    session.close()
+    return output
+
+@app.get("/statistics/info/all")
 async def statistics_info():
     """
     Возвращает общую информацию о состоянии базы данных. Не принимает аргументов.
     """
-    stc.update("/statistics/info/")
+    stc.update("/statistics/info/all/")
 
     # Создание сессии
     Session = sessionmaker(bind=sdc.engine)
@@ -718,6 +739,7 @@ async def statistics_info():
     genres_count = session.query(sdc.Genres).count()
     mod_tag_count = session.query(sdc.ModTag).count()
     dependencies_count = session.query(func.count(func.distinct(sdc.mods_dependencies.c.mod_id))).scalar()
+    total_mods_downloads = session.query(func.sum(sdc.Game.mods_downloads)).scalar()
 
     session.close()
 
@@ -730,7 +752,31 @@ async def statistics_info():
     session.close()
 
     return {"mods": mod_count, "games": game_count, "genres": genres_count, "mods_tags": mod_tag_count,
-            "mods_dependencies": dependencies_count, "statistics_days": days_count}
+            "mods_dependencies": dependencies_count, "statistics_days": days_count,
+            "mods_sent_count": total_mods_downloads}
+
+
+@app.get("/statistics/info/type_map")
+async def statistics_type_map(request: Request):
+    """
+    Возвращает карту переводов для типов в статистической ветке. Не принимает аргументов.
+    Определяет на каком языке отправить ответ через поле `Accept-Language` в `headers` запроса.
+    """
+    stc.update("/statistics/info/type_map/")
+
+    languages = [lang.split(";")[0].strip() for lang in request.headers.get("Accept-Language").split(",")]
+
+    select_language = languages[0] if languages else "ru"
+    for language in languages:
+        if language in stc.allow_language_type_map:
+            select_language = language
+            break
+    if select_language is None:
+        select_language = "ru"
+
+    # Ваш код для обработки языковых кодов
+    # Например, вы можете вернуть список языковых кодов в формате JSON
+    return {"language": select_language, "result": stc.cache_types_data(select_language)}
 
 
 def init():
@@ -741,6 +787,7 @@ def init():
     except SteamCMDException:
         print("Steam клиент уже установлен, попробуйте использовать параметр --force для принудительной установки")
 if threads.get("start", None) == None:
+    stc.update("start")
     threads["start"] = threading.Thread(target=init, name="start")
     threads["start"].start()
 

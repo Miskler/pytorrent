@@ -1,12 +1,12 @@
 import json
-from telebot.async_telebot import AsyncTeleBot
+import time
+import telebot
+import requests
+import pymorphy2
+import email.utils
 from urllib.parse import urlparse
 from urllib.parse import parse_qs
-import requests
-import time
-import email.utils
-import pymorphy2
-import telebot
+from telebot.async_telebot import AsyncTeleBot
 
 with open('key.json', 'r') as file:
     # Загружаем содержимое файла в переменную

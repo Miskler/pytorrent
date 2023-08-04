@@ -1,7 +1,5 @@
 import flet as ft
 
-import flet as ft
-
 def main(page: ft.Page):
 
     page.window_min_width = 600

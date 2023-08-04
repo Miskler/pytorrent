@@ -1,7 +1,48 @@
+from datetime import datetime, date
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Date, insert
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-from datetime import datetime, date
+
+
+allow_language_type_map = {"ru": "Нет перевода 0_о"}
+
+# Таблица с типами
+type_map = {
+    "start": {"ru": "Запусков сервера"},
+    "/statistics/info/type_map/": {"ru": "Запросов к карте переводов"},
+    "/statistics/info/all/": {"ru": "Запросов к общей статистической сводке"},
+    "/statistics/day/": {"ru": "Запросов к ежедневной статистике"},
+    "/statistics/hour/": {"ru": "Запросов к ежечасовой статистике"},
+    "/statistics/delay/": {"ru": "Запросов к информации о задержке"},
+    "/condition/mod/": {"ru": "Запросов к состоянию нескольких модов"},
+    "/info/mod/": {"ru": "Запросов к информации о модах"},
+    "/info/game/": {"ru": "Запросов к информации об играх"},
+    "/list/resources_mods/": {"ru": "Запросов к ресурсам модов"},
+    "/list/genres/": {"ru": "Запросов к списку жанров"},
+    "/list/tags/": {"ru": "Запросов к списку тегов для модов"},
+    "/list/games/": {"ru": "Запросов к списку игр"},
+    "/list/mods/": {"ru": "Запросов к списку модов"},
+    "/download/": {"ru": "Запросов к локальной загрузке"},
+    "mod_not_found_local": {"ru": "При запросе к локальному моду, его не было найдено"},
+    "files_sent": {"ru": "Файлов отправлено с сервера"},
+    "damaged_mod": {"ru": "Обнаружено поврежденных записей"},
+    "/download/steam/": {"ru": "Запросов к загрузке со Steam"},
+    "download_from_steam_error": {"ru": "Загрузок со Steam окончено провалом"},
+    "download_from_steam_ok": {"ru": "Загрузок со Steam прошло успешно"},
+    "updating_mod": {"ru": "Модов поставлено на обновление"},
+    "/": {"ru": "Перенаправлений на документацию"}
+}
+cache = {}
+
+def cache_types_data(code: str):
+    if cache.get(code):
+        return cache.get(code)
+    else:
+        output = {}
+        for key in type_map.keys():
+            output[key] = type_map[key].get(code, allow_language_type_map[code])
+        cache[code] = output
+        return output
 
 
 engine = create_engine('sqlite:///sql/statistics.db')

@@ -1,12 +1,12 @@
-import json
 import os
 import tool
-from fastapi.responses import FileResponse
+import json
 import requests
-from bs4 import BeautifulSoup
 import sql_data_client as sdc
-from sqlalchemy import delete, insert
+from bs4 import BeautifulSoup
 from datetime import datetime
+from sqlalchemy import delete, insert
+from fastapi.responses import FileResponse
 
 headers = {
     "Content-type": "application/x-www-form-urlencoded",
