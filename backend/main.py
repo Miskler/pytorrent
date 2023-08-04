@@ -6,7 +6,7 @@ import sql_data_client as sdc
 import tool
 import time
 import sql_statistics_client as stc
-from sqlalchemy import delete, insert
+from sqlalchemy import delete, insert, func
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql.expression import desc
 from datetime import datetime
@@ -80,9 +80,11 @@ async def mod_dowloader_request(mod_id: int):
             tool.downloads_count_update(session=session, mod=rows)
 
             stc.create_processing(type="download_steam_ok", time_start=wait_time)
+            stc.update("files_sent")
             return output
 
         stc.create_processing(type="download_steam_error", time_start=wait_time)
+        stc.update("mod_not_found_local")
         return JSONResponse(status_code=404, content={"message": "this mod was not found", "error_id": 2})
     elif threads.get(f"{str(mod['consumer_app_id'])}/{str(mod_id)}", None) == True: # Проверяем, загружаем ли этот ресурс прямо сейчас
         stc.create_processing(type="download_steam_error", time_start=wait_time)
@@ -101,8 +103,10 @@ async def mod_dowloader_request(mod_id: int):
             if db_datetime >= mod_update: # дата добавления на сервер позже чем последнее обновление (не надо обновлять)
                 tool.downloads_count_update(session=session, mod=rows[0])
                 stc.create_processing(type="download_steam_ok", time_start=wait_time)
+                stc.update("files_sent")
                 return FileResponse(real_path+'.zip', filename=f"{rows[0].name}.zip")
             else:
+                stc.update("updating_mod")
                 updating = True
         elif (rows != None and len(rows) > 0) and os.path.isdir(real_path):  # Если это по какой-то причине - папка
             mod_update = datetime.fromtimestamp(mod["time_updated"])
@@ -116,8 +120,10 @@ async def mod_dowloader_request(mod_id: int):
                 # Шлем пользователю
                 tool.downloads_count_update(session=session, mod=rows[0])
                 stc.create_processing(type="download_steam_ok", time_start=wait_time)
+                stc.update("files_sent")
                 return FileResponse(real_path+'.zip', filename=f"{rows[0].name}.zip")
             else:
+                stc.update("updating_mod")
                 updating = True
 
         # Чистим сервер
@@ -127,6 +133,7 @@ async def mod_dowloader_request(mod_id: int):
             os.remove(real_path+'.zip')
 
         if not updating:
+            stc.update("damaged_mod")
             session = Session()
             # Если загрузка окончена ошибкой
             delete_binding = sdc.games_mods.delete().where(sdc.games_mods.c.mod_id == int(mod_id))
@@ -188,6 +195,8 @@ def mod_dowload(mod_data:dict, wait_time, update: bool = False):
     print(f"Загрузка завершена: {mod_data['consumer_app_id']}/{mod_data['publishedfileid']}")
 
     if ok: #Если загрузка прошла успешно
+        stc.update("download_from_steam_ok")
+
         insert_statement = insert(sdc.games_mods).values(
             mod_id=mod_data['publishedfileid'],
             game_id=mod_data['consumer_app_id']
@@ -203,6 +212,7 @@ def mod_dowload(mod_data:dict, wait_time, update: bool = False):
         print(f"Процесс загрузки ({mod_data['consumer_app_id']}/{mod_data['publishedfileid']}) завершен! (успешно)")
         stc.create_processing(type="steam_ok", time_start=wait_time)
     else:
+        stc.update("download_from_steam_error")
         # Если загрузка окончена ошибкой
         delete_binding = sdc.games_mods.delete().where(sdc.games_mods.c.mod_id == int(mod_data['publishedfileid']))
         delete_statement = delete(sdc.Mod).where(sdc.Mod.id == int(mod_data['publishedfileid']))
@@ -252,14 +262,18 @@ async def download(mod_id: int):
             tool.downloads_count_update(session=session, mod=rows[0])
             stc.create_processing(type="download_local_ok", time_start=wait_time)
             session.close()
+
+            stc.update("files_sent")
             return output
         else:
             stc.create_processing(type="download_local_error", time_start=wait_time)
             session.close()
+            stc.update("damaged_mod")
             return JSONResponse(status_code=404, content={"message": "the mod is damaged", "error_id": 2, "test": rows})
 
     stc.create_processing(type="download_local_error", time_start=wait_time)
     session.close()
+    stc.update("mod_not_found_local")
     return JSONResponse(status_code=404, content={"message": "the mod is not on the server", "error_id": 1})
 
 @app.get("/list/mods/")
@@ -631,6 +645,92 @@ async def statistics_delay():
         output["full"] = 0
 
     return output
+
+@app.get("/statistics/hour")
+async def statistics_hour(day:int = -1, month:int = -1, year:int = -1, start_hour:int = 0, end_hour:int = 23):
+    """
+    Возвращает подробную статистику о запросах и работе сервера в конкретный день.
+
+    Принимает необязательные параметры:
+    1. `day` *(`int`)* - день месяца *(по умолчанию текущий)*.
+    2. `month` *(`int`)* - месяц в году *(по умолчанию текущий)*.
+    3. `year` *(`int`)* - год *(по умолчанию текущий)*.
+    4. `start_hour` *(`int`)* - фильтрация по минимальному значению часа *(диапазон 0...23)*.
+    5. `end_hour` *(`int`)* - фильтрация по максимальному значению часа *(диапазон 0...23)*.
+
+    При фильтрации по часу отсекаются крайние значения, но не указанное.
+    Т.е. - если указать в `start_hour` и в `end_hour` одно и тоже значение,
+    то на выходе получите статистику только по этому часу.
+    """
+    stc.update("/statistics/hour/")
+    if start_hour < 0 or start_hour > 23:
+        return JSONResponse(status_code=412, content={"message": "start_hour exits 24 hour format", "error_id": 1})
+    elif end_hour < 0 or end_hour > 23:
+        return JSONResponse(status_code=412, content={"message": "end_hour exits 24 hour format", "error_id": 2})
+    elif start_hour > end_hour:
+        return JSONResponse(status_code=409, content={"message": "conflicting request", "error_id": 3})
+
+    start_date = datetime.now().replace(hour=start_hour, minute=0, second=0, microsecond=0)
+    end_date = datetime.now().replace(hour=end_hour, minute=0, second=0, microsecond=0)
+
+    if 0 < day <= 31:
+        start_date = start_date.replace(day=day)
+        end_date = end_date.replace(day=day)
+
+    if 0 < month <= 12:
+        start_date = start_date.replace(month=month)
+        end_date = end_date.replace(month=month)
+
+    if 0 < year:
+        start_date = start_date.replace(year=year)
+        start_date = start_date.replace(year=year)
+
+    Session = sessionmaker(bind=stc.engine)
+    session = Session()
+
+    query = session.query(stc.StatisticsHour)
+    query = query.filter(stc.StatisticsHour.date_time >= start_date, stc.StatisticsHour.date_time <= end_date)
+
+    return query.all()
+
+@app.get("/statistics/day")
+async def statistics_day():
+    """
+    Функция не готова :(
+    """
+    stc.update("/statistics/day/")
+
+    return
+
+@app.get("/statistics/info")
+async def statistics_info():
+    """
+    Возвращает общую информацию о состоянии базы данных. Не принимает аргументов.
+    """
+    stc.update("/statistics/info/")
+
+    # Создание сессии
+    Session = sessionmaker(bind=sdc.engine)
+    session = Session()
+
+    mod_count = session.query(sdc.Mod).count()
+    game_count = session.query(sdc.Game).count()
+    genres_count = session.query(sdc.Genres).count()
+    mod_tag_count = session.query(sdc.ModTag).count()
+    dependencies_count = session.query(func.count(func.distinct(sdc.mods_dependencies.c.mod_id))).scalar()
+
+    session.close()
+
+    # Создание сессии
+    Session = sessionmaker(bind=stc.engine)
+    session = Session()
+
+    days_count = session.query(func.count(func.distinct(stc.StatisticsDay.date))).scalar()
+
+    session.close()
+
+    return {"mods": mod_count, "games": game_count, "genres": genres_count, "mods_tags": mod_tag_count,
+            "mods_dependencies": dependencies_count, "statistics_days": days_count}
 
 
 def init():
